@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import numpy as np
 import torch.nn.functional as F
-from tqdm.auto import tqdm
+import tqdm.auto
 
 class PositionalEmbedding(nn.Module):
     # PositionalEmbedding
@@ -355,7 +355,7 @@ class GaussianDiffusion(nn.Module):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        with tqdm(int(self.num_timesteps * T_factor)+int(self.num_timesteps * T_factor)) as pbar:
+        with tqdm.tqdm(int(self.num_timesteps * T_factor)+int(self.num_timesteps * T_factor)) as pbar:
 
             for t in range(int(self.num_timesteps * T_factor)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
