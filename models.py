@@ -2,6 +2,7 @@ import torch
 from torch import nn
 import numpy as np
 import torch.nn.functional as F
+from tqdm.auto import tqdm
 
 class PositionalEmbedding(nn.Module):
     # PositionalEmbedding
@@ -354,21 +355,23 @@ class GaussianDiffusion(nn.Module):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        for t in range(int(self.num_timesteps * T_factor)):
-            t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-            noise = torch.randn_like(x)
-            x = self.sample_q(x, t_batch, noise)
+        with tqdm(int(self.num_timesteps * T_factor)+int(self.num_timesteps * T_factor)) as pbar:
 
-            if see_whole_sequence:
-                seq.append(x.cpu().detach())
+            for t in range(int(self.num_timesteps * T_factor)):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                noise = torch.randn_like(x)
+                x = self.sample_q(x, t_batch, noise)
+                pbar.update(1)
+                if see_whole_sequence:
+                    seq.append(x.cpu().detach())
 
-        for t in range(int(self.num_timesteps) - 1, -1, -1):
-            t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-            with torch.no_grad():
-                out = self.sample_p(x,t)
-
-            if see_whole_sequence:
-                seq.append(x.cpu().detach())
+            for t in range(int(self.num_timesteps * T_factor) - 1, -1, -1):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                with torch.no_grad():
+                    out = self.sample_p(x,t)
+                pbar.update(1)
+                if see_whole_sequence:
+                    seq.append(x.cpu().detach())
 
         return x.cpu().detach() if not see_whole_sequence else seq
 
