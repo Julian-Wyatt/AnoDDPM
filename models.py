@@ -253,7 +253,7 @@ def extract(arr, timesteps, broadcast_shape, device):
     return res.expand(broadcast_shape).to(device)
 
 
-class GaussianDiffusion(nn.Module):
+class GaussianDiffusion():
     def __init__(
             self, model,
             img_size,
@@ -301,7 +301,7 @@ class GaussianDiffusion(nn.Module):
         )
 
 
-
+    @torch.no_grad()
     def predict_x_0_from_eps(self, x_t, t, eps):
         return (extract(self.sqrt_recip_alphas_cumprod, t,x_t.shape, x_t.device) * x_t
                 - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape, x_t.device)*eps)
@@ -369,6 +369,25 @@ class GaussianDiffusion(nn.Module):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
                     out = self.sample_p(x,t_batch)
+                    x = out["sample"]
+                pbar.update(1)
+                if see_whole_sequence:
+                    seq.append(x.cpu().detach())
+
+        return x.cpu().detach() if not see_whole_sequence else seq
+
+    @torch.no_grad()
+    def sample(self, x, see_whole_sequence=False):
+
+        if see_whole_sequence:
+            seq = [x.cpu().detach()]
+
+        with tqdm.tqdm_notebook(int(self.num_timesteps) + int(self.num_timesteps)) as pbar:
+
+            for t in range(int(self.num_timesteps) - 1, -1, -1):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                with torch.no_grad():
+                    out = self.sample_p(x, t_batch)
                     x = out["sample"]
                 pbar.update(1)
                 if see_whole_sequence:
