@@ -247,7 +247,7 @@ def get_beta_schedule(num_diffusion_steps, name="cosine"):
 
 
 def extract(arr, timesteps, broadcast_shape, device):
-    res = arr[timesteps].float()
+    res = torch.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape).to(device)
@@ -318,7 +318,7 @@ class GaussianDiffusion(nn.Module):
 
         pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1,1), t, model_output)
         model_mean, _, _ = self.q_posterior_mean_variance(
-            x_start=pred_x_0, x_t=x_t, t=t
+            pred_x_0, x_t, t
         )
         return {
             "mean": model_mean,
@@ -351,13 +351,13 @@ class GaussianDiffusion(nn.Module):
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
     @torch.no_grad()
-    def forward_backward(self, x, T_factor, see_whole_sequence=False):
+    def forward_backward(self, x, see_whole_sequence=False):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        with tqdm.tqdm(int(self.num_timesteps * T_factor)+int(self.num_timesteps * T_factor)) as pbar:
+        with tqdm.tqdm_notebook(int(self.num_timesteps)+int(self.num_timesteps )) as pbar:
 
-            for t in range(int(self.num_timesteps * T_factor)):
+            for t in range(int(self.num_timesteps)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 noise = torch.randn_like(x)
                 x = self.sample_q(x, t_batch, noise)
@@ -365,10 +365,11 @@ class GaussianDiffusion(nn.Module):
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
 
-            for t in range(int(self.num_timesteps * T_factor) - 1, -1, -1):
+            for t in range(int(self.num_timesteps) - 1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
-                    out = self.sample_p(x,t)
+                    out = self.sample_p(x,t_batch)
+                    x = out["sample"]
                 pbar.update(1)
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
