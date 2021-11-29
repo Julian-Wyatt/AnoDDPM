@@ -1,3 +1,6 @@
+# https://github.com/openai/guided-diffusion/blob/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924/guided_diffusion/gaussian_diffusion.py
+
+
 import torch
 from torch import nn
 import numpy as np
