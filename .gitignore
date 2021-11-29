@@ -7,3 +7,6 @@ NFBS_Dataset.tar
 .DS_Store
 *.pyc
 *.zip
+diffusion-videos
+diffusion-training-images
+model
