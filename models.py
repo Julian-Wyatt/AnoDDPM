@@ -252,6 +252,8 @@ def extract(arr, timesteps, broadcast_shape, device):
         res = res[..., None]
     return res.expand(broadcast_shape).to(device)
 
+def mean_flat(tensor):
+    return torch.mean(tensor, dim=list(range(1,len(tensor.shape))))
 
 class GaussianDiffusion(nn.Module):
     def __init__(
@@ -259,7 +261,9 @@ class GaussianDiffusion(nn.Module):
             img_size,
             betas,
             img_channels=1,
-            loss_type="l2"):
+            loss_type="l2",
+            loss_weight='prop-t',
+            eta=0):
         super().__init__()
 
         self.model = model
@@ -268,6 +272,10 @@ class GaussianDiffusion(nn.Module):
         self.loss_type = loss_type
         self.num_timesteps = len(betas)
 
+        if loss_weight == 'prop-t':
+            self.weights = np.arange(self.num_timesteps,0,-1)
+        else:
+            self.weights = np.ones(self.num_timesteps)
         alphas = 1 - betas
         self.betas = betas
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
@@ -299,7 +307,15 @@ class GaussianDiffusion(nn.Module):
                 * np.sqrt(alphas)
                 / (1.0 - self.alphas_cumprod)
         )
+        self.eta = eta
 
+    def sample_t_with_weights(self,b_size,device):
+        p = self.weights / np.sum(self.weights)
+        indices_np = np.random.choice(len(p),size=b_size,p=p)
+        indices = torch.from_numpy(indices_np).long().to(device)
+        weights_np = 1/len(p)*p[indices_np]
+        weights = torch.from_numpy(weights_np).float().to(device)
+        return indices, weights
 
     @torch.no_grad()
     def predict_x_0_from_eps(self, x_t, t, eps):
@@ -335,7 +351,30 @@ class GaussianDiffusion(nn.Module):
             (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
         )
         sample = out["mean"] + nonzero_mask * torch.exp(0.5*out["log_variance"])*noise
-        return {"sample":sample.clamp(-1,1),"pred_x_0":out["pred_x_0"]}
+        return {"sample":sample.clamp(-1,1),"pred_x_0":out["pred_x_0"].clamp(-1,1)}
+
+    def sample_p_ddim(self,x_t,t,eta):
+        out = self.p_mean_variance(x_t,t)
+        eps = self.model(x_t,t)
+        alpha_bar = extract(self.alphas_cumprod,t,x_t.shape,x_t.device)
+        alpha_bar_prev = extract(self.alphas_cumprod_prev,t,x_t.shape,x_t.device)
+        # experiment with eta 0-1
+        sigma = (
+            eta *
+            torch.sqrt((1-alpha_bar_prev)/(1-alpha_bar)) *
+            torch.sqrt(1-alpha_bar/alpha_bar_prev)
+        )
+
+        #Equation 12 from DDIM
+        mean_pred = (
+            torch.sqrt(alpha_bar_prev) * out['pred_x_0'] + torch.sqrt(1-alpha_bar_prev-sigma**2)*eps
+        )
+        nonzero_mask = (
+            (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
+        )
+        noise = torch.randn_like(x_t)
+        sample = mean_pred + nonzero_mask * sigma*noise
+        return {'sample':sample, 'pred_x_0':out['pred_x_0']}
 
 
     @torch.no_grad()
@@ -351,26 +390,34 @@ class GaussianDiffusion(nn.Module):
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
     @torch.no_grad()
-    def forward_backward(self, x, see_whole_sequence=False):
+    def forward_backward(self, x, see_whole_sequence=False,t_distance=None, use_ddim=False):
+        if t_distance == None:
+            t_distance = self.num_timesteps
+
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        with tqdm.tqdm_notebook(int(self.num_timesteps)+int(self.num_timesteps )) as pbar:
+        for t in range(int(t_distance)):
+            t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+            noise = torch.randn_like(x)
+            x = self.sample_q(x, t_batch, noise)
 
-            for t in range(int(self.num_timesteps)):
+            if see_whole_sequence:
+                seq.append(x.cpu().detach())
+        if use_ddim:
+            for t in range(self.num_timesteps - 1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-                noise = torch.randn_like(x)
-                x = self.sample_q(x, t_batch, noise)
-                pbar.update(1)
+                with torch.no_grad():
+                    out = self.sample_p_ddim(x, t_batch, self.eta)
+                    x = out["sample"]
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
-
-            for t in range(int(self.num_timesteps) - 1, -1, -1):
+        else:
+            for t in range(int(t_distance) - 1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
                     out = self.sample_p(x,t_batch)
                     x = out["sample"]
-                pbar.update(1)
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
 
@@ -382,7 +429,7 @@ class GaussianDiffusion(nn.Module):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        with tqdm.tqdm_notebook(int(self.num_timesteps) + int(self.num_timesteps)) as pbar:
+        with tqdm.tqdm(int(self.num_timesteps) + int(self.num_timesteps)) as pbar:
 
             for t in range(int(self.num_timesteps) - 1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
@@ -407,11 +454,18 @@ class GaussianDiffusion(nn.Module):
         estimate_noise = self.model(noisy_x, t)
 
         if self.loss_type == "l1":
-            loss = (estimate_noise - noise).abs().mean()
+            loss = mean_flat((estimate_noise - noise).abs())
         elif self.loss_type == "l2":
-            loss = (estimate_noise - noise).square().mean()
+            loss = mean_flat((estimate_noise - noise).square())
         return loss, noisy_x, estimate_noise
 
+
+
     def forward(self, x):
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device)
-        return self.calc_loss(x, t)
+        # t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device)
+        t, weights = self.sample_t_with_weights(x.shape[0],x.device)
+
+        loss = self.calc_loss(x, t)
+        loss = ((loss[0]*weights).mean(),loss[1],loss[2])
+        # print(weights,loss[0])
+        return loss
