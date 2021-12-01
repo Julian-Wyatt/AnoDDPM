@@ -3,8 +3,8 @@
 
 import torch
 from torch import nn
-import numpy as np
 import torch.nn.functional as F
+import numpy as np
 import tqdm.auto
 
 class PositionalEmbedding(nn.Module):
@@ -29,7 +29,6 @@ class PositionalEmbedding(nn.Module):
         return emb
 
 
-
 class Downsample(nn.Module):
     def __init__(self, in_channels):
         super().__init__()
@@ -38,6 +37,7 @@ class Downsample(nn.Module):
 
     def forward(self, x, time_embed=None):
         return self.downsample(x)
+
 
 class Upsample(nn.Module):
     def __init__(self, in_channels):
@@ -49,7 +49,6 @@ class Upsample(nn.Module):
 
     def forward(self, x, time_embed=None):
         return self.upsample(x)
-
 
 
 class AttentionBlock(nn.Module):
@@ -72,10 +71,10 @@ class AttentionBlock(nn.Module):
         v = v.permute(0, 2, 3, 1).view(b, h * w, c)
 
         # initial Mat mult * 1/sqrt(c)
-        mat_Mult = torch.bmm(q, k) * (c ** (-0.5))
-        assert mat_Mult.shape == (b, h * w, w * h)
+        mat_mult = torch.bmm(q, k) * (c ** (-0.5))
+        assert mat_mult.shape == (b, h * w, w * h)
 
-        attention = torch.softmax(mat_Mult, dim=-1)
+        attention = torch.softmax(mat_mult, dim=-1)
         output = torch.bmm(attention, v)
         assert output.shape == (b, h * w, c)
 
@@ -104,8 +103,8 @@ class ResBlock(nn.Module):
         self.conv_out = nn.Sequential(
             nn.Dropout(dropout),
             nn.Conv2d(out_channels, out_channels, 3, padding=1))
-        self.residual_connection = nn.Conv2d(in_channels, out_channels,
-                                             1) if in_channels != out_channels else nn.Identity()
+        self.residual_connection = nn.Conv2d(in_channels, out_channels, 1)\
+            if in_channels != out_channels else nn.Identity()
         self.attention = AttentionBlock(out_channels, num_groups) if use_attention else nn.Identity()
 
 
@@ -121,14 +120,14 @@ class ResBlock(nn.Module):
         return self.attention(out)
 
 
-
 class UNet(nn.Module):
 
     # UNet model
     def __init__(
             self,
+            img_size,
             base_channels,
-            channel_mults=(1, 2, 4, 8),
+            channel_mults="",
             res_block_layer_count=2,
             activation=F.relu,
             dropout=0.2,
@@ -137,6 +136,18 @@ class UNet(nn.Module):
             time_embed_scale=1,
             num_groups=32):
         super().__init__()
+
+        if channel_mults == "":
+            if img_size == 256:
+                channel_mults = (1, 1, 2, 2, 4, 4)
+            elif img_size == 128:
+                channel_mults = (1, 1, 2, 3, 4)
+            elif img_size == 64:
+                channel_mults = (1, 2, 3, 4)
+            elif img_size == 32:
+                channel_mults = (1, 2, 3, 4)
+            else:
+                raise ValueError(f"unsupported image size: {img_size}")
 
         self.activation = activation
         in_channels = 1
@@ -231,22 +242,23 @@ class UNet(nn.Module):
 
 
 def get_beta_schedule(num_diffusion_steps, name="cosine"):
+    betas = []
     if name == "cosine":
         max_beta = 0.999
         f = lambda t: np.cos((t + 0.008) / 1.008 * np.pi / 2) ** 2
-        betas = []
         for i in range(num_diffusion_steps):
             t1 = i / num_diffusion_steps
             t2 = (i + 1) / num_diffusion_steps
             betas.append(min(1 - f(t2) / f(t1), max_beta))
-        return np.array(betas)
+        betas = np.array(betas)
     elif name == "linear":
         scale = 1000 / num_diffusion_steps
         beta_start = scale * 0.0001
         beta_end = scale * 0.02
-        return np.linspace(beta_start, beta_end, num_diffusion_steps, dtype=np.float64)
+        betas = np.linspace(beta_start, beta_end, num_diffusion_steps, dtype=np.float64)
     else:
         raise NotImplementedError(f"unknown beta schedule: {name}")
+    return betas
 
 
 def extract(arr, timesteps, broadcast_shape, device):
@@ -255,8 +267,10 @@ def extract(arr, timesteps, broadcast_shape, device):
         res = res[..., None]
     return res.expand(broadcast_shape).to(device)
 
+
 def mean_flat(tensor):
     return torch.mean(tensor, dim=list(range(1,len(tensor.shape))))
+
 
 class GaussianDiffusion(nn.Module):
     def __init__(
@@ -389,12 +403,12 @@ class GaussianDiffusion(nn.Module):
 
         # var = \frac{1-alphacumprod prev}{1-alphacumprod} * betas
         posterior_var = extract(self.posterior_variance, t, x_t.shape, x_t.device)
-        posterior_log_var_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape,x_t.device)
+        posterior_log_var_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape, x_t.device)
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
     @torch.no_grad()
     def forward_backward(self, x, see_whole_sequence=False,t_distance=None, use_ddim=False):
-        if t_distance == None:
+        if t_distance is None:
             t_distance = self.num_timesteps
 
         if see_whole_sequence:
@@ -444,7 +458,6 @@ class GaussianDiffusion(nn.Module):
                     seq.append(x.cpu().detach())
 
         return x.cpu().detach() if not see_whole_sequence else seq
-
 
     def sample_q(self, x, t, noise):
         return (extract(self.sqrt_alphas_cumprod, t, x.shape, x.device) * x +
