@@ -1,8 +1,8 @@
 library_NFBS
 Train
 Test
-diff-params-24-11-100epochs
-NFBS_Dataset.tar
+model/diff-params-24-11-100epochs
+library_NFBS/NFBS_Dataset.tar
 .idea
 .DS_Store
 *.pyc

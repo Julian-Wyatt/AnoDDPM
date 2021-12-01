@@ -1,10 +1,10 @@
-from torch.utils.data import Dataset
-import torchvision.transforms as transforms
 import os
+from random import randint
 import nibabel as nib
 import torch
 import numpy as np
-from random import randint
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 # helper function to make getting another batch of data easier
 def cycle(iterable):
@@ -23,7 +23,7 @@ class MRIDataset(Dataset):
                 on a sample.
         """
         self.transform = transforms.Compose([transforms.ToPILImage(),
-                                transforms.CenterCrop(128),
+                                transforms.CenterCrop(240),
                                 transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
                                 # transforms.CenterCrop(256),
                                 transforms.ToTensor(),
@@ -48,9 +48,9 @@ class MRIDataset(Dataset):
         # random between 40 and 130
         # print(nib.load(img_name).slicer[:,90:91,:].dataobj.shape)
         if self.random_slice:
-            sliceIdx = randint(40, 130)
+            slice_idx = randint(40, 130)
         else:
-            sliceIdx = 80
+            slice_idx = 80
         img = nib.load(img_name)
         image = img.get_fdata()
 
@@ -59,7 +59,7 @@ class MRIDataset(Dataset):
         img_range = (image_mean - 1 * image_std, image_mean + 2 * image_std)
         image = np.clip(image, img_range[0], img_range[1])
         image = image / (img_range[1] - img_range[0])
-        image = image[:, sliceIdx:sliceIdx + 1, :].reshape(256, 192).astype(np.float32)
+        image = image[:, slice_idx:slice_idx + 1, :].reshape(256, 192).astype(np.float32)
 
         if self.transform:
             image = self.transform(image)
