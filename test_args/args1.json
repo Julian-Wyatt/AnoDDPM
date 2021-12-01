@@ -1,0 +1,15 @@
+{
+  "img_size": [128,128],
+  "Batch_Size": 50,
+  "EPOCHS": 1000,
+  "T": 1000,
+  "base_channels": 128,
+  "beta_schedule": "linear",
+  "channel_mults": "",
+  "loss-type": "l2",
+  "loss_weight": "prop-t",
+  "lr": 0.0001,
+  "random_slice": false,
+  "sample_distance": 30,
+  "weight_decay": 0.0
+}
