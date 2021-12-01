@@ -15,10 +15,10 @@ def cycle(iterable):
 class MRIDataset(Dataset):
     """MRI dataset."""
 
-    def __init__(self, root_dir, transform=None, img_size=(32,32), random_slice=False):
+    def __init__(self, ROOT_DIR, transform=None, img_size=(32,32), random_slice=False):
         """
         Args:
-            root_dir (string): Directory with all the images.
+            ROOT_DIR (string): Directory with all the images.
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
@@ -30,10 +30,10 @@ class MRIDataset(Dataset):
                                 transforms.Normalize((0.5), (0.5))
                                 ]) if not transform else transform
 
-        self.filenames = os.listdir(root_dir)
+        self.filenames = os.listdir(ROOT_DIR)
         if ".DS_Store" in self.filenames:
             self.filenames.remove(".DS_Store")
-        self.root_dir = root_dir
+        self.ROOT_DIR = ROOT_DIR
         self.random_slice = random_slice
 
     def __len__(self):
@@ -44,7 +44,7 @@ class MRIDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        img_name = os.path.join(self.root_dir, self.filenames[idx], f"sub-{self.filenames[idx]}_ses-NFB3_T1w.nii.gz")
+        img_name = os.path.join(self.ROOT_DIR, self.filenames[idx], f"sub-{self.filenames[idx]}_ses-NFB3_T1w.nii.gz")
         # random between 40 and 130
         # print(nib.load(img_name).slicer[:,90:91,:].dataobj.shape)
         if self.random_slice:
