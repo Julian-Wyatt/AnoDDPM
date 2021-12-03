@@ -25,8 +25,7 @@ ROOT_DIR = "./"
 
 def output_img(img, row_size=-1):
     scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    return torchvision.utils.make_grid(scale_img(img), nrow=row_size).cpu().data.permute(0, 2, 1).contiguous().permute(
-        2, 1, 0)
+    return torchvision.utils.make_grid(scale_img(img)[:row_size,...], nrow=row_size).cpu().data.permute(0, 2,1).contiguous().permute(2, 1, 0)
 
 
 def train(training_dataset_loader, testing_dataset_loader, args):
@@ -123,7 +122,7 @@ def init_dataset_loader(mri_dataset,args):
 
     # convert to rgb:
     # new["image"] = torch.cat((new["image"][:],new["image"][:],new["image"][:]),dim=1)
-
+    print(new["image"].shape)
     plt.rcParams['figure.dpi'] = 100
     plt.grid(False)
     plt.imshow(output_img(new["image"]),cmap='gray')
@@ -158,9 +157,10 @@ def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, 
     if save_vids:
         fig, ax = plt.subplots()
         if epoch % 100 == 0:
+            plt.rcParams['figure.dpi'] = 200
             out = diffusion.forward_backward(x, True, args['sample_distance'])
             imgs = [[ax.imshow(output_img(x,row_size),animated=True)] for x in out]
-            ani = animation.ArtistAnimation(fig, imgs, interval=200, blit=True,
+            ani = animation.ArtistAnimation(fig, imgs, interval=150, blit=True,
                                             repeat_delay=1000)
 
             ani.save(f'{ROOT_DIR}diffusion-videos/sample-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
@@ -170,21 +170,21 @@ def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, 
 if __name__=='__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed(1)
-    args = {
-        'img_size': (128, 128),
-        'base_channels': 128,
-        'channel_mults': (1, 2, 4, 8),
-        'T': 1000,
-        'beta_schedule': 'linear',
-        'loss-type': 'l2',
-        'loss_weight': 'prop-t',  # uniform or prop-t
-        'sample_distance': 15,
-        'random_slice': False,
-        'EPOCHS':1500,
-        'Batch_Size':50,
-        'lr':1e-4,
-        'weight_decay':0.0,
-    }
+    # args = {
+    #     'img_size': (128, 128),
+    #     'base_channels': 128,
+    #     'channel_mults': (1, 2, 4, 8),
+    #     'T': 1000,
+    #     'beta_schedule': 'linear',
+    #     'loss-type': 'l2',
+    #     'loss_weight': 'prop-t',  # uniform or prop-t
+    #     'sample_distance': 15,
+    #     'random_slice': False,
+    #     'EPOCHS':1500,
+    #     'Batch_Size':50,
+    #     'lr':1e-4,
+    #     'weight_decay':0.0,
+    # }
 
 
     for i in ['./model/',"./diffusion-videos/",'./diffusion-training-images/']:
@@ -193,16 +193,15 @@ if __name__=='__main__':
         except OSError:
             pass
 
-    # %%
-    training_dataset, testing_dataset = init_datasets(args)
-    training_dataset_loader = init_dataset_loader(training_dataset,args)
-    testing_dataset_loader = init_dataset_loader(testing_dataset,args)
 
     files = os.listdir(f'{ROOT_DIR}test_args')
     for file in files:
         if file[-5:]==".json":
-            with open(f'{ROOT_DIR}test_args/{i}', 'r') as f:
+            with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
                 args = json.load(f)
             args['arg_num'] = file[-6]
+            training_dataset, testing_dataset = init_datasets(args)
+            training_dataset_loader = init_dataset_loader(training_dataset, args)
+            testing_dataset_loader = init_dataset_loader(testing_dataset, args)
             # load, pass args
             train(training_dataset_loader,testing_dataset_loader,args)
