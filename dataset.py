@@ -43,22 +43,27 @@ class MRIDataset(Dataset):
         # print(repr(idx))
         if torch.is_tensor(idx):
             idx = idx.tolist()
+        if os.path.exists(os.path.join(self.ROOT_DIR, self.filenames[idx], f"{self.filenames[idx]}.npy")):
+            image = np.load(os.path.join(self.ROOT_DIR, self.filenames[idx], f"{self.filenames[idx]}.npy"))
+            pass
+        else:
+            img_name = os.path.join(self.ROOT_DIR, self.filenames[idx], f"sub-{self.filenames[idx]}_ses-NFB3_T1w.nii.gz")
+            # random between 40 and 130
+            # print(nib.load(img_name).slicer[:,90:91,:].dataobj.shape)
+            img = nib.load(img_name)
+            image = img.get_fdata()
 
-        img_name = os.path.join(self.ROOT_DIR, self.filenames[idx], f"sub-{self.filenames[idx]}_ses-NFB3_T1w.nii.gz")
-        # random between 40 and 130
-        # print(nib.load(img_name).slicer[:,90:91,:].dataobj.shape)
+            image_mean = np.mean(image)
+            image_std = np.std(image)
+            img_range = (image_mean - 1 * image_std, image_mean + 2 * image_std)
+            image = np.clip(image, img_range[0], img_range[1])
+            image = image / (img_range[1] - img_range[0])
+            np.save(os.path.join(self.ROOT_DIR, self.filenames[idx], f"{self.filenames[idx]}.npy"),image.astype(
+                np.float32))
         if self.random_slice:
             slice_idx = randint(40, 130)
         else:
             slice_idx = 80
-        img = nib.load(img_name)
-        image = img.get_fdata()
-
-        image_mean = np.mean(image)
-        image_std = np.std(image)
-        img_range = (image_mean - 1 * image_std, image_mean + 2 * image_std)
-        image = np.clip(image, img_range[0], img_range[1])
-        image = image / (img_range[1] - img_range[0])
         image = image[:, slice_idx:slice_idx + 1, :].reshape(256, 192).astype(np.float32)
 
         if self.transform:
