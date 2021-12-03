@@ -279,7 +279,7 @@ class GaussianDiffusion(nn.Module):
             betas,
             img_channels=1,
             loss_type="l2",
-            loss_weight='prop-t',
+            loss_weight='prop-t', #prop t / uniform / None
             eta=0):
         super().__init__()
 
@@ -291,8 +291,10 @@ class GaussianDiffusion(nn.Module):
 
         if loss_weight == 'prop-t':
             self.weights = np.arange(self.num_timesteps,0,-1)
-        else:
+        elif loss_weight =="uniform":
             self.weights = np.ones(self.num_timesteps)
+
+        self.loss_weight = loss_weight
         alphas = 1 - betas
         self.betas = betas
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
@@ -477,11 +479,15 @@ class GaussianDiffusion(nn.Module):
 
 
 
-    def forward(self, x):
-        # t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device)
-        t, weights = self.sample_t_with_weights(x.shape[0],x.device)
+    def forward(self, x, args):
+        if self.loss_weight == "none":
+            if args["train_start"]:
+                t,weights = torch.randint(0, min(args["sample_distance"]*2,self.num_timesteps), (x.shape[0],), device=x.device),1
+            else:
+                t, weights = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device), 1
+        else:
+            t, weights = self.sample_t_with_weights(x.shape[0],x.device)
 
         loss = self.calc_loss(x, t)
         loss = ((loss[0]*weights).mean(),loss[1],loss[2])
-        # print(weights,loss[0])
         return loss

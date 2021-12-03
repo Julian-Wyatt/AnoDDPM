@@ -13,5 +13,6 @@
   "sample_distance": 30,
   "weight_decay": 0.0,
   "save_imgs": false,
-  "save_vids": true
+  "save_vids": true,
+  "train_start": false
 }

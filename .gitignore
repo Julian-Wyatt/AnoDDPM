@@ -10,3 +10,4 @@ library_NFBS/NFBS_Dataset.tar
 diffusion-videos
 diffusion-training-images
 model
+temp.txt
