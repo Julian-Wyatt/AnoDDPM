@@ -40,9 +40,10 @@ def train(training_dataset_loader, testing_dataset_loader, args):
     diffusion = diffusion.to(device)
 
     optimiser = optim.AdamW(diffusion.parameters(), lr=args['lr'], weight_decay=args['weight_decay'])
-
+    startTime = time.time()
     losses = []
-    tqdm_epoch = tqdm.trange(args['EPOCHS'])
+    # tqdm_epoch = tqdm.trange(args['EPOCHS'])
+    tqdm_epoch = range(args['EPOCHS'])
     # dataset loop
     for epoch in tqdm_epoch:
         mean_loss = []
@@ -50,14 +51,14 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             data = next(training_dataset_loader)
             x = data["image"]
             x = x.to(device)
-            loss, noisy, est = diffusion(x)
+            loss, noisy, est = diffusion(x,args)
             optimiser.zero_grad()
             loss.backward()
             optimiser.step()
 
             mean_loss.append(loss.data.cpu())
-            print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
-                  f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}\r")
+            # print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
+            #       f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}\r")
             # tqdm_epoch.set_postfix({"imgs trained": (1 + i) * args['Batch_Size'] + epoch * 100, "loss": loss.data.cpu() ,'last epoch mean loss': losses[-1] if len(losses)>0 else 0})
             if epoch % 5 == 0 and i == 0:
                 row_size = min(8,args['Batch_Size'])
@@ -65,6 +66,12 @@ def train(training_dataset_loader, testing_dataset_loader, args):
                                  save_vids=args['save_vids'])
 
         losses.append(np.mean(mean_loss))
+        if epoch % 2==0:
+            timeTaken = time.time() - startTime
+            print(f"epoch: {epoch}, imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss:"
+                  f" {loss.data.cpu():.2f} ,"
+                  f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}, time taken: {timeTaken}, "
+                  f"time per epoch {timeTaken/(epoch+1):.2f}\r")
 
     save(diffusion=diffusion,args=args)
 
