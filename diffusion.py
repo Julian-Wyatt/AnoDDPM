@@ -1,6 +1,7 @@
 import time
 import json
 import os
+import sys
 from random import seed
 
 from torch import optim
@@ -55,6 +56,8 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             optimiser.step()
 
             mean_loss.append(loss.data.cpu())
+            print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
+                  f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}\r")
             # tqdm_epoch.set_postfix({"imgs trained": (1 + i) * args['Batch_Size'] + epoch * 100, "loss": loss.data.cpu() ,'last epoch mean loss': losses[-1] if len(losses)>0 else 0})
             if epoch % 5 == 0 and i == 0:
                 row_size = min(8,args['Batch_Size'])
@@ -72,7 +75,7 @@ def testing(testing_dataset_loader, diffusion, args, device=torch.device('cpu'),
 
     plt.rcParams['figure.dpi'] = 200
     # for i in [args['sample_distance'], args['T'] / 4, None]:
-    for i in [*range(args['sample_distance']),args['T']]:
+    for i in [*range(1,args['sample_distance']),args['T']]:
         data = next(testing_dataset_loader)
         x = data["image"]
         x = x.to(device)
@@ -116,7 +119,7 @@ def init_datasets(args):
 def init_dataset_loader(mri_dataset,args):
     dataset_loader = dataset.cycle(torch.utils.data.DataLoader(mri_dataset,
                                                        batch_size=args['Batch_Size'], shuffle=True,
-                                                       num_workers=2))
+                                                       num_workers=5))
 
     new = next(dataset_loader)
 
@@ -160,32 +163,18 @@ def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, 
             plt.rcParams['figure.dpi'] = 200
             out = diffusion.forward_backward(x, True, args['sample_distance'])
             imgs = [[ax.imshow(output_img(x,row_size),animated=True)] for x in out]
-            ani = animation.ArtistAnimation(fig, imgs, interval=150, blit=True,
+            ani = animation.ArtistAnimation(fig, imgs, interval=100, blit=True,
                                             repeat_delay=1000)
 
             ani.save(f'{ROOT_DIR}diffusion-videos/sample-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
                      f'ARGS={args["arg_num"]}-EPOCH={epoch}.mp4')
 
+    plt.close('all')
+
 
 if __name__=='__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     seed(1)
-    # args = {
-    #     'img_size': (128, 128),
-    #     'base_channels': 128,
-    #     'channel_mults': (1, 2, 4, 8),
-    #     'T': 1000,
-    #     'beta_schedule': 'linear',
-    #     'loss-type': 'l2',
-    #     'loss_weight': 'prop-t',  # uniform or prop-t
-    #     'sample_distance': 15,
-    #     'random_slice': False,
-    #     'EPOCHS':1500,
-    #     'Batch_Size':50,
-    #     'lr':1e-4,
-    #     'weight_decay':0.0,
-    # }
-
 
     for i in ['./model/',"./diffusion-videos/",'./diffusion-training-images/']:
         try:
@@ -194,7 +183,11 @@ if __name__=='__main__':
             pass
 
 
-    files = os.listdir(f'{ROOT_DIR}test_args')
+    if len(sys.argv[1:]) > 0:
+        files = sys.argv[1:]
+    else:
+        files = os.listdir(f'{ROOT_DIR}test_args')
+
     for file in files:
         if file[-5:]==".json":
             with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:

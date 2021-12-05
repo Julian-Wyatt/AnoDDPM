@@ -279,7 +279,7 @@ class GaussianDiffusion(nn.Module):
             betas,
             img_channels=1,
             loss_type="l2",
-            loss_weight='prop-t', #prop t / uniform / None
+            loss_weight='none', #prop t / uniform / None
             eta=0):
         super().__init__()
 
@@ -328,6 +328,7 @@ class GaussianDiffusion(nn.Module):
         )
         self.eta = eta
 
+    @torch.no_grad()
     def sample_t_with_weights(self,b_size,device):
         p = self.weights / np.sum(self.weights)
         indices_np = np.random.choice(len(p),size=b_size,p=p)
@@ -362,6 +363,7 @@ class GaussianDiffusion(nn.Module):
             "pred_x_0": pred_x_0,
         }
 
+    @torch.no_grad()
     def sample_p(self,x_t, t):
         out = self.p_mean_variance(x_t,t)
         noise = torch.randn_like(x_t)
@@ -370,8 +372,9 @@ class GaussianDiffusion(nn.Module):
             (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
         )
         sample = out["mean"] + nonzero_mask * torch.exp(0.5*out["log_variance"])*noise
-        return {"sample":sample.clamp(-1,1),"pred_x_0":out["pred_x_0"].clamp(-1,1)}
+        return {"sample":sample,"pred_x_0":out["pred_x_0"]}
 
+    @torch.no_grad()
     def sample_p_ddim(self,x_t,t,eta):
         out = self.p_mean_variance(x_t,t)
         eps = self.model(x_t,t)
@@ -416,10 +419,11 @@ class GaussianDiffusion(nn.Module):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        for t in range(int(t_distance)):
+        for t in range(1,int(t_distance)+1):
             t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
             noise = torch.randn_like(x)
-            x = self.sample_q(x, t_batch, noise)
+            with torch.no_grad():
+                x = self.sample_q(x, t_batch, noise)
 
             if see_whole_sequence:
                 seq.append(x.cpu().detach())
@@ -432,7 +436,7 @@ class GaussianDiffusion(nn.Module):
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
         else:
-            for t in range(int(t_distance) - 1, -1, -1):
+            for t in range(int(t_distance), -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
                     out = self.sample_p(x,t_batch)
@@ -491,3 +495,4 @@ class GaussianDiffusion(nn.Module):
         loss = self.calc_loss(x, t)
         loss = ((loss[0]*weights).mean(),loss[1],loss[2])
         return loss
+
