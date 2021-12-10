@@ -419,7 +419,7 @@ class GaussianDiffusion(nn.Module):
         if see_whole_sequence:
             seq = [x.cpu().detach()]
 
-        for t in range(1,int(t_distance)+1):
+        for t in range(int(t_distance)):
             t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
             noise = torch.randn_like(x)
             with torch.no_grad():
@@ -436,7 +436,7 @@ class GaussianDiffusion(nn.Module):
                 if see_whole_sequence:
                     seq.append(x.cpu().detach())
         else:
-            for t in range(int(t_distance), -1, -1):
+            for t in range(int(t_distance) -1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
                     out = self.sample_p(x,t_batch)

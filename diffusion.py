@@ -60,13 +60,13 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             # print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
             #       f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}\r")
             # tqdm_epoch.set_postfix({"imgs trained": (1 + i) * args['Batch_Size'] + epoch * 100, "loss": loss.data.cpu() ,'last epoch mean loss': losses[-1] if len(losses)>0 else 0})
-            if epoch % 5 == 0 and i == 0:
+            if epoch % 50 == 0 and i == 0:
                 row_size = min(8,args['Batch_Size'])
                 training_outputs(diffusion, x, est, noisy, epoch, row_size, save_imgs=args['save_imgs'],
                                  save_vids=args['save_vids'])
 
         losses.append(np.mean(mean_loss))
-        if epoch % 2==0:
+        if epoch % 100==0:
             timeTaken = time.time() - startTime
             print(f"epoch: {epoch}, imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss:"
                   f" {loss.data.cpu():.2f} ,"
@@ -126,7 +126,7 @@ def init_datasets(args):
 def init_dataset_loader(mri_dataset,args):
     dataset_loader = dataset.cycle(torch.utils.data.DataLoader(mri_dataset,
                                                        batch_size=args['Batch_Size'], shuffle=True,
-                                                       num_workers=5))
+                                                       num_workers=2))
 
     new = next(dataset_loader)
 
@@ -143,7 +143,7 @@ def init_dataset_loader(mri_dataset,args):
 
 def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, save_vids=False):
     if save_imgs:
-        if epoch % 25 == 0:
+        if epoch % 100 == 0:
             # for a given t, output x_0, & prediction of x_(t-1), and x_0
             noise = torch.rand_like(x)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=x.device)
@@ -166,7 +166,7 @@ def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, 
 
     if save_vids:
         fig, ax = plt.subplots()
-        if epoch % 100 == 0:
+        if epoch % 1000 == 0:
             plt.rcParams['figure.dpi'] = 200
             out = diffusion.forward_backward(x, True, args['sample_distance'])
             imgs = [[ax.imshow(output_img(x,row_size),animated=True)] for x in out]
