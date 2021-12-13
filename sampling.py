@@ -3,6 +3,8 @@ import torch
 from diffusion import testing, init_datasets, init_dataset_loader
 from models import UNet, GaussianDiffusion, get_beta_schedule
 
+# multiple samples from varying encoding distances
+
 
 if __name__=='__main__':
 

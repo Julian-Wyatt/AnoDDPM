@@ -73,7 +73,9 @@ def train(training_dataset_loader, testing_dataset_loader, args):
                   f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}, time taken: {timeTaken}, "
                   f"time per epoch {timeTaken/(epoch+1):.2f}\r")
 
-    save(diffusion=diffusion,args=args)
+            save(diffusion=diffusion, args=args, optimiser=optimiser)
+
+    save(diffusion=diffusion,args=args, optimiser=optimiser)
 
     testing(testing_dataset_loader,diffusion, args=args,device=device)
 
@@ -101,19 +103,29 @@ def testing(testing_dataset_loader, diffusion, args, device=torch.device('cpu'),
         print("saved")
 
 
-def save(diffusion,args):
+def save(final,diffusion,optimiser,args, loss=0, epoch=0):
     try:
-        os.makedirs(f'./model/diff-params-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
-                     f'ARGS={args["arg_num"]}')
+        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
+           f'={time.gmtime().tm_mon}')
     except OSError:
         pass
 
-    torch.save(diffusion.state_dict(),f'{ROOT_DIR}model/diff-params-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
-                     f'ARGS={args["arg_num"]}/params')
-
-    with open(f'./model/diff-params-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
-                     f'ARGS={args["arg_num"]}/args.json','w') as file:
-        json.dump(args,file)
+    if final:
+        torch.save({
+            'n_epoch': args["EPOCHS"],
+            'model_state_dict': diffusion.state_dict(),
+            'optimizer_state_dict': optimiser.state_dict(),
+            # 'loss': LOSS,
+        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
+           f'={time.gmtime().tm_mon}/params-final.pt')
+    else:
+        torch.save({
+            'n_epoch': epoch,
+            'model_state_dict': diffusion.state_dict(),
+            'optimizer_state_dict': optimiser.state_dict(),
+            'loss': loss,
+        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
+           f'={time.gmtime().tm_mon}/params.pt')
 
 
 def init_datasets(args):
