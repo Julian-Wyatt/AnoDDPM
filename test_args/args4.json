@@ -1,18 +1,18 @@
 {
-  "img_size": [64,64],
-  "Batch_Size": 50,
-  "EPOCHS": 1000,
+  "img_size": [256,256],
+  "Batch_Size": 1,
+  "EPOCHS": 10000,
   "T": 1000,
   "base_channels": 128,
   "beta_schedule": "linear",
   "channel_mults": "",
   "loss-type": "l2",
-  "loss_weight": "prop-t",
+  "loss_weight": "none",
   "lr": 0.0001,
   "random_slice": false,
-  "sample_distance": 30,
+  "sample_distance": 40,
   "weight_decay": 0.0,
   "save_imgs": false,
   "save_vids": true,
-  "train_start": false
+  "train_start": true
 }
