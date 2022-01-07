@@ -115,6 +115,7 @@ def save(final,diffusion,optimiser,args, loss=0, epoch=0):
             'n_epoch': args["EPOCHS"],
             'model_state_dict': diffusion.state_dict(),
             'optimizer_state_dict': optimiser.state_dict(),
+            "args":args
             # 'loss': LOSS,
         }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
            f'={time.gmtime().tm_mon}/params-final.pt')
@@ -123,6 +124,7 @@ def save(final,diffusion,optimiser,args, loss=0, epoch=0):
             'n_epoch': epoch,
             'model_state_dict': diffusion.state_dict(),
             'optimizer_state_dict': optimiser.state_dict(),
+            "args": args,
             'loss': loss,
         }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
            f'={time.gmtime().tm_mon}/params.pt')
@@ -138,18 +140,19 @@ def init_datasets(args):
 def init_dataset_loader(mri_dataset,args):
     dataset_loader = dataset.cycle(torch.utils.data.DataLoader(mri_dataset,
                                                        batch_size=args['Batch_Size'], shuffle=True,
-                                                       num_workers=2))
+                                                       num_workers=0))
 
     new = next(dataset_loader)
 
     # convert to rgb:
     # new["image"] = torch.cat((new["image"][:],new["image"][:],new["image"][:]),dim=1)
-    print(new["image"].shape)
-    plt.rcParams['figure.dpi'] = 100
-    plt.grid(False)
-    plt.imshow(output_img(new["image"]),cmap='gray')
-    # plt.show()
-    plt.pause(0.0001)
+    if type(new["image"]) != list:
+        print(new["image"].shape)
+        plt.rcParams['figure.dpi'] = 100
+        plt.grid(False)
+        plt.imshow(output_img(new["image"]),cmap='gray')
+        # plt.show()
+        plt.pause(0.0001)
     return dataset_loader
 
 
