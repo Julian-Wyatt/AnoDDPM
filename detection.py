@@ -1,9 +1,9 @@
 import random
 
 import numpy as np
-import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib.pylab as plt
+# import matplotlib
+# matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
 import os
 import matplotlib.animation as animation
 import dataset
@@ -18,7 +18,6 @@ np.set_printoptions(edgeitems=30, linewidth=100000,
 
 def detect(image,diffusion):
 
-    #
     pass
 
 def heatmap(real:torch.Tensor,recon:torch.Tensor):
@@ -37,10 +36,13 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dataset_path = './Cancerous Dataset/EdinburghDataset/Anomalous/raw'
 
+    # 'diff-params-ARGS\=4-DAY\=9-MONTH\=1' 'diff-params-ARGS\=5-DAY\=8-MONTH\=1'
 
     for param in params:
-        param = "diff-params-ARGS=4-DAY=17-MONTH=12"
-        output = torch.load(f'./model/{param}/params-final.pt', map_location=device)
+        try:
+            output = torch.load(f'./model/{param}/params-final.pt', map_location=device)
+        except FileNotFoundError:
+            continue
         if "args" in output:
             args = output["args"]
         else:
@@ -83,12 +85,11 @@ if __name__ == "__main__":
         except OSError:
             pass
 
-        FILES = 0
-        for epoch in range(1):
-            for i in range(len(AnoDataset)//5):
+        for epoch in range(4):
+            for i in range(len(AnoDataset)):
                 new = next(loader)
-                print(new["filenames"])
-                output = diff.forward_backward(new["image"][0],see_whole_sequence=True,t_distance=30)
+                img = new["image"][0].to(device)
+                output = diff.forward_backward(img,see_whole_sequence=True,t_distance=25)
                 fig, ax = plt.subplots()
 
                 plt.rcParams['figure.dpi'] = 200
@@ -97,9 +98,16 @@ if __name__ == "__main__":
                 ani = animation.ArtistAnimation(fig, imgs, interval=100, blit=True,
                                                 repeat_delay=1000)
 
+                try:
+                    os.makedirs(f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}')
+                except OSError:
+                    pass
+
+                temp = os.listdir(f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}')
+
                 ani.save(
-                    f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}-ARGS={args["arg_num"]}-'
-                    f'{random.randint(0,100000)}.mp4')
+                    f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}/ARGS={args["arg_num"]}-'
+                    f'{len(temp)+1}.mp4')
 
                 plt.close('all')
 
