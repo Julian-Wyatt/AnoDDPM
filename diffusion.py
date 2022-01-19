@@ -43,7 +43,7 @@ def train(training_dataset_loader, testing_dataset_loader, args):
     startTime = time.time()
     losses = []
     # tqdm_epoch = tqdm.trange(args['EPOCHS'])
-    tqdm_epoch = range(args['EPOCHS'])
+    tqdm_epoch = range(1,args['EPOCHS']+1)
     # dataset loop
     for epoch in tqdm_epoch:
         mean_loss = []
@@ -73,9 +73,9 @@ def train(training_dataset_loader, testing_dataset_loader, args):
                   f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}, time taken: {timeTaken}, "
                   f"time per epoch {timeTaken/(epoch+1):.2f}\r")
 
-            save(diffusion=diffusion, args=args, optimiser=optimiser)
+            save(diffusion=diffusion, args=args, optimiser=optimiser,final=False)
 
-    save(diffusion=diffusion,args=args, optimiser=optimiser)
+    save(diffusion=diffusion,args=args, optimiser=optimiser,final=True)
 
     testing(testing_dataset_loader,diffusion, args=args,device=device)
 
@@ -140,7 +140,7 @@ def init_datasets(args):
 def init_dataset_loader(mri_dataset,args):
     dataset_loader = dataset.cycle(torch.utils.data.DataLoader(mri_dataset,
                                                        batch_size=args['Batch_Size'], shuffle=True,
-                                                       num_workers=0))
+                                                       num_workers=0, ))
 
     new = next(dataset_loader)
 
@@ -150,9 +150,9 @@ def init_dataset_loader(mri_dataset,args):
         print(new["image"].shape)
         plt.rcParams['figure.dpi'] = 100
         plt.grid(False)
-        plt.imshow(output_img(new["image"]),cmap='gray')
+        # plt.imshow(output_img(new["image"]),cmap='gray')
         # plt.show()
-        plt.pause(0.0001)
+        # plt.pause(0.0001)
     return dataset_loader
 
 
