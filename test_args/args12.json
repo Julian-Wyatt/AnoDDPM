@@ -1,0 +1,22 @@
+{
+  "img_size": [256,256],
+  "Batch_Size": 1,
+  "EPOCHS": 4000,
+  "T": 1000,
+  "base_channels": 192,
+  "beta_schedule": "linear",
+  "channel_mults": "",
+  "loss-type": "l2",
+  "loss_weight": "none",
+  "train_start": true,
+  "lr": 1e-4,
+  "random_slice": true,
+  "sample_distance": 40,
+  "weight_decay": 0.0,
+  "save_imgs":false,
+  "save_vids":true,
+  "dropout":0,
+  "attention_resolutions":"32,16,8",
+  "num_heads":2,
+  "num_head_channels":-1
+}
