@@ -563,22 +563,24 @@ class GaussianDiffusion:
         posterior_log_var_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape, x_t.device)
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
-    def forward_backward(self,model, x, see_whole_sequence="whole",t_distance=None):
+    def forward_backward(self,model, x, see_whole_sequence="half",t_distance=None):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
         if t_distance is None:
             t_distance = self.num_timesteps
+        seq = [x.cpu().detach()]
+        if see_whole_sequence == "whole":
 
-        if see_whole_sequence:
-            seq = [x.cpu().detach()]
+            for t in range(1,int(t_distance)):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                noise = torch.randn_like(x)
+                with torch.no_grad():
+                    x = self.sample_q_gradual(x, t_batch, noise)
 
-        for t in range(int(t_distance)):
-            t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-            noise = torch.randn_like(x)
-            with torch.no_grad():
-                x = self.sample_q(x, t_batch, noise)
-
-            if see_whole_sequence:
+                seq.append(x.cpu().detach())
+        else:
+            x = self.sample_q(x,torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),torch.randn_like(x))
+            if see_whole_sequence=="half":
                 seq.append(x.cpu().detach())
 
         for t in range(int(t_distance) -1, -1, -1):
@@ -595,6 +597,11 @@ class GaussianDiffusion:
     def sample_q(self, x, t, noise):
         return (extract(self.sqrt_alphas_cumprod, t, x.shape, x.device) * x +
                 extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape, x.device) * noise)
+
+    #TODO: curious whether noise needs to be the same across every t here
+    def sample_q_gradual(self, x, t, noise):
+        return (extract(np.sqrt(1-self.betas[t]), t, x.shape, x.device) * x +
+                extract(self.betas[t], t, x.shape, x.device) * noise)
 
     def calc_loss(self, model, x, t):
         noise = torch.randn_like(x)
