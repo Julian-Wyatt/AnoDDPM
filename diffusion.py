@@ -2,6 +2,7 @@ import time
 import json
 import os
 import sys
+import copy
 from random import seed
 
 from torch import optim
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 import tqdm.auto
 
-from models import UNet, GaussianDiffusion, get_beta_schedule
+from models import UNet, GaussianDiffusion, get_beta_schedule, update_ema_params
 import dataset
 
 
@@ -26,35 +27,40 @@ ROOT_DIR = "./"
 
 def output_img(img, row_size=-1):
     scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    return torchvision.utils.make_grid(scale_img(img)[:row_size,...], nrow=row_size).cpu().data.permute(0, 2,1).contiguous().permute(2, 1, 0)
+    return torchvision.utils.make_grid(scale_img(img), nrow=row_size).cpu().data.permute(0, 2,1).contiguous().permute(2, 1, 0)
 
 
 def train(training_dataset_loader, testing_dataset_loader, args):
-    unet = UNet(args['img_size'][0],args['base_channels'], channel_mults=args['channel_mults'])
-
+    model = UNet(args['img_size'][0],args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
+        "dropout"], n_heads=args["num_heads"],n_head_channels=args["num_head_channels"])
+    model.to(device)
     betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
-    diffusion = GaussianDiffusion(unet.to(device), args['img_size'], betas, loss_weight=args['loss_weight'],
+    diffusion = GaussianDiffusion(args['img_size'], betas, loss_weight=args['loss_weight'],
                                   loss_type=args['loss-type'])
 
-    diffusion = diffusion.to(device)
+    ema = copy.deepcopy(model)
 
-    optimiser = optim.AdamW(diffusion.parameters(), lr=args['lr'], weight_decay=args['weight_decay'])
+    optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'],betas=(0.9,0.999))
     startTime = time.time()
     losses = []
     # tqdm_epoch = tqdm.trange(args['EPOCHS'])
-    tqdm_epoch = range(1,args['EPOCHS']+1)
+    tqdm_epoch = range(args['EPOCHS']+1)
     # dataset loop
+    last100Loss = []
     for epoch in tqdm_epoch:
         mean_loss = []
         for i in range(100 // args['Batch_Size']):
             data = next(training_dataset_loader)
             x = data["image"]
             x = x.to(device)
-            loss, noisy, est = diffusion(x,args)
+            loss, noisy, est = diffusion.p_loss(model,x,args)
             optimiser.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimiser.step()
+
+            update_ema_params(ema,model)
 
             mean_loss.append(loss.data.cpu())
             # print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
@@ -63,71 +69,77 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             if epoch % 50 == 0 and i == 0:
                 row_size = min(8,args['Batch_Size'])
                 training_outputs(diffusion, x, est, noisy, epoch, row_size, save_imgs=args['save_imgs'],
-                                 save_vids=args['save_vids'])
+                                 save_vids=args['save_vids'],ema=ema)
+                # save(diffusion=diffusion, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
+
 
         losses.append(np.mean(mean_loss))
         if epoch % 100==0:
             timeTaken = time.time() - startTime
-            print(f"epoch: {epoch}, imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss:"
-                  f" {loss.data.cpu():.2f} ,"
-                  f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}, time taken: {timeTaken}, "
-                  f"time per epoch {timeTaken/(epoch+1):.2f}\r")
+            remaining_epochs = args['EPOCHS'] - epoch
+            time_per_epoch = timeTaken/(epoch+1)
+            hours = remaining_epochs*time_per_epoch/3600
+            mins = (hours % 1) * 60
+            hours = int(hours)
+            print(f"epoch: {epoch}, imgs trained: {(i+1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
+                  f" {np.mean(losses[-20:]):.4f} ,"
+                  f"last 100 epoch mean loss: {np.mean(losses[-100:]) if len(losses)>0 else 0:.4f},"
+                  f"time per epoch {time_per_epoch:.2f}, est time remaining: {hours} H {mins:.2f}M\r")
 
-            save(diffusion=diffusion, args=args, optimiser=optimiser,final=False)
+        if epoch % 1000 ==0 and epoch >= 0:
+            save(diffusion=diffusion, args=args, optimiser=optimiser,final=False,ema=ema,epoch=epoch)
 
-    save(diffusion=diffusion,args=args, optimiser=optimiser,final=True)
+    save(diffusion=diffusion,args=args, optimiser=optimiser,final=True,ema=ema)
 
-    testing(testing_dataset_loader,diffusion, args=args,device=device)
+    testing(testing_dataset_loader,diffusion,ema=ema, args=args,device=device)
 
 
-def testing(testing_dataset_loader, diffusion, args, device=torch.device('cpu'), use_ddim=False):
+def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('cpu')):
 
     plt.rcParams['figure.dpi'] = 200
     # for i in [args['sample_distance'], args['T'] / 4, None]:
-    for i in [*range(1,args['sample_distance']),args['T']]:
+    # for i in [*range(1,args['sample_distance']),args['T']]:
+    for i in [*range(1, args['sample_distance']),args['sample_distance']*2]:
         data = next(testing_dataset_loader)
         x = data["image"]
         x = x.to(device)
         row_size = min(5,args['Batch_Size'])
 
         fig, ax = plt.subplots()
-        out = diffusion.forward_backward(x, see_whole_sequence=True, use_ddim=use_ddim, t_distance=i)
+        out = diffusion.forward_backward(ema,x, see_whole_sequence="half", t_distance=i)
         imgs = [[ax.imshow(output_img(x,row_size), animated=True)] for x in out]
         ani = animation.ArtistAnimation(fig, imgs, interval=200, blit=True,
                                         repeat_delay=1000)
 
-        ani.save(f'{ROOT_DIR}diffusion-videos/test-set-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
-                 f't={i}-ARGS={args["arg_num"]}.mp4')
-        plt.title(
-            f'x,forward_backward with video: {ROOT_DIR}diffusion-videos/test-set-{time.gmtime().tm_mday}-{time.gmtime().tm_mon}-{i}-{args["EPOCHS"]}epochs.mp4')
-        print("saved")
+        ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set-t={i}.mp4')
+        print(f"saved {i}")
 
 
-def save(final,diffusion,optimiser,args, loss=0, epoch=0):
+def save(final,diffusion,optimiser,args,ema, loss=0, epoch=0):
     try:
-        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
-           f'={time.gmtime().tm_mon}')
+        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}')
+        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
     except OSError:
         pass
 
     if final:
         torch.save({
             'n_epoch': args["EPOCHS"],
-            'model_state_dict': diffusion.state_dict(),
+            # 'model_state_dict': diffusion.state_dict(),
             'optimizer_state_dict': optimiser.state_dict(),
+            "ema":ema.state_dict(),
             "args":args
             # 'loss': LOSS,
-        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
-           f'={time.gmtime().tm_mon}/params-final.pt')
+        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}/params-final.pt')
     else:
         torch.save({
             'n_epoch': epoch,
-            'model_state_dict': diffusion.state_dict(),
+            # 'model_state_dict': diffusion.state_dict(),
             'optimizer_state_dict': optimiser.state_dict(),
             "args": args,
+            "ema": ema.state_dict(),
             'loss': loss,
-        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}-DAY={time.gmtime().tm_mday}-MONTH'
-           f'={time.gmtime().tm_mon}/params.pt')
+        }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}/checkpoint/diff_epoch={epoch}.pt')
 
 
 def init_datasets(args):
@@ -140,7 +152,7 @@ def init_datasets(args):
 def init_dataset_loader(mri_dataset,args):
     dataset_loader = dataset.cycle(torch.utils.data.DataLoader(mri_dataset,
                                                        batch_size=args['Batch_Size'], shuffle=True,
-                                                       num_workers=0, ))
+                                                       num_workers=0, drop_last=True))
 
     new = next(dataset_loader)
 
@@ -156,14 +168,19 @@ def init_dataset_loader(mri_dataset,args):
     return dataset_loader
 
 
-def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, save_vids=False):
+def training_outputs(diffusion, x, est,noisy, epoch, row_size, ema, save_imgs=False, save_vids=False):
+    try:
+        os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}')
+        os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}')
+    except OSError:
+        pass
     if save_imgs:
         if epoch % 100 == 0:
             # for a given t, output x_0, & prediction of x_(t-1), and x_0
             noise = torch.rand_like(x)
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=x.device)
             x_t = diffusion.sample_q(x, t, noise)
-            temp = diffusion.sample_p(x_t, t)
+            temp = diffusion.sample_p(ema,x_t, t)
             out = torch.cat((x[:row_size, ...].cpu(), temp["sample"][:row_size, ...].cpu(),
                              temp["pred_x_0"][:row_size, ...].cpu()))
             plt.title(f'real,sample,prediction x_0-{epoch}epoch')
@@ -172,24 +189,25 @@ def training_outputs(diffusion, x, est,noisy, epoch, row_size, save_imgs=False, 
             out = torch.cat((x[:row_size, ...].cpu(), noisy[:row_size, ...].cpu(), est[:row_size, ...].cpu(),
                              (est - noisy).square().cpu()[:row_size, ...]))
             plt.title(f'real,noisy,noise prediction,mse-{epoch}epoch')
-
         plt.rcParams['figure.dpi'] = 150
         plt.grid(False)
         plt.imshow(output_img(out,row_size),cmap='gray')
 
-        plt.savefig(f'./diffusion-training-images/ARGS={args["arg_num"]}-EPOCH={epoch}.png')
-
+        plt.savefig(f'./diffusion-training-images/ARGS={args["arg_num"]}/EPOCH={epoch}.png')
+        plt.clf()
     if save_vids:
         fig, ax = plt.subplots()
-        if epoch % 1000 == 0:
+        if epoch % 500 == 0:
             plt.rcParams['figure.dpi'] = 200
-            out = diffusion.forward_backward(x, True, args['sample_distance'])
+            if epoch%1000==0:
+                out = diffusion.forward_backward(ema,x, "whole", args['sample_distance'])
+            else:
+                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'])
             imgs = [[ax.imshow(output_img(x,row_size),animated=True)] for x in out]
             ani = animation.ArtistAnimation(fig, imgs, interval=100, blit=True,
                                             repeat_delay=1000)
 
-            ani.save(f'{ROOT_DIR}diffusion-videos/sample-DAY={time.gmtime().tm_mday}-MONTH={time.gmtime().tm_mon}'
-                     f'ARGS={args["arg_num"]}-EPOCH={epoch}.mp4')
+            ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/sample-EPOCH={epoch}.mp4')
 
     plt.close('all')
 
@@ -209,12 +227,13 @@ if __name__=='__main__':
         files = sys.argv[1:]
     else:
         files = os.listdir(f'{ROOT_DIR}test_args')
-
+    print(files)
     for file in files:
         if file[-5:]==".json":
             with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
                 args = json.load(f)
-            args['arg_num'] = file[-6]
+            args['arg_num'] = file[4:-5]
+            print(file)
             training_dataset, testing_dataset = init_datasets(args)
             training_dataset_loader = init_dataset_loader(training_dataset, args)
             testing_dataset_loader = init_dataset_loader(testing_dataset, args)
