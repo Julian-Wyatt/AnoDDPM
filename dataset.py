@@ -180,13 +180,14 @@ class AnomalousMRIDataset(Dataset):
             image = image / (img_range[1] - img_range[0])
             np.save(os.path.join(f"{self.filenames[idx]}.npy"),image.astype(
                 np.float32))
-
+        sample = {}
         if self.slice_selection == "random":
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             slice_idx = randint(temp_range.start,temp_range.stop)
             image = image[:, :,slice_idx:slice_idx + 1].reshape(image.shape[0],image.shape[1]).astype(np.float32)
             if self.transform:
                 image = [self.transform(image)]
+            sample["slices"] = slice_idx
         elif self.slice_selection == "iterateKnown":
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             output = []
@@ -205,6 +206,7 @@ class AnomalousMRIDataset(Dataset):
                     temp = self.transform(temp)
                 output.append(temp)
             image = output
-
-        sample = {'image': image, "filenames": self.filenames[idx]}
+        sample["image"] = image
+        sample["filenames"] = self.filenames[idx]
+        # sample = {'image': image, "filenames": self.filenames[idx], "slices":slice_idx}
         return sample
