@@ -36,10 +36,10 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dataset_path = './Cancerous Dataset/EdinburghDataset/Anomalous/raw'
 
-    # 'diff-params-ARGS\=4-DAY\=9-MONTH\=1' 'diff-params-ARGS\=5-DAY\=8-MONTH\=1'
-
     for param in params:
         try:
+            # if checkpointed version
+            # output = torch.load(f'./model/{param}/checkpoint/diff_epoch=0.pt', map_location=device)
             output = torch.load(f'./model/{param}/params-final.pt', map_location=device)
         except FileNotFoundError:
             continue
@@ -66,22 +66,21 @@ if __name__ == "__main__":
                   "arg_num":4
                 }
 
-
         unet = UNet(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
 
         betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
-        diff = GaussianDiffusion(unet.to(device), args['img_size'], betas, loss_weight=args['loss_weight'],
-                                      loss_type=args[
-                                          'loss-type'])
+        diff = GaussianDiffusion(args['img_size'], betas, loss_weight=args['loss_weight'],
+                                      loss_type=args['loss-type'])
 
-        diff.load_state_dict(output['model_state_dict'])
+        unet.load_state_dict(output["ema"])
 
         AnoDataset = dataset.AnomalousMRIDataset(ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
                                               slice_selection="random")
         loader = init_dataset_loader(AnoDataset,args)
+
         try:
-            os.makedirs(f'./diffusion-videos/Anomalous')
+            os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous')
         except OSError:
             pass
 
@@ -89,7 +88,7 @@ if __name__ == "__main__":
             for i in range(len(AnoDataset)):
                 new = next(loader)
                 img = new["image"][0].to(device)
-                output = diff.forward_backward(img,see_whole_sequence=True,t_distance=25)
+                output = diff.forward_backward(unet,img,see_whole_sequence="whole",t_distance=25)
                 fig, ax = plt.subplots()
 
                 plt.rcParams['figure.dpi'] = 200
@@ -99,15 +98,17 @@ if __name__ == "__main__":
                                                 repeat_delay=1000)
 
                 try:
-                    os.makedirs(f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}')
+                    os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
                 except OSError:
                     pass
 
-                temp = os.listdir(f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}')
+                temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
 
-                ani.save(
-                    f'./diffusion-videos/Anomalous/{new["filenames"][0][-9:-4]}/ARGS={args["arg_num"]}-'
-                    f'{len(temp)+1}.mp4')
+                output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/{len(temp)+1}.mp4'
+                if "slices" in new:
+                    output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
+                                  f'{new["filenames"][0][-9:-4]}/slices={new["slices"]}-attempt{len(temp)+1}.mp4'
+                ani.save(output_name)
 
                 plt.close('all')
 
