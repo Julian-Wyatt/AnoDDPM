@@ -84,8 +84,8 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             print(f"epoch: {epoch}, imgs trained: {(i+1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
                   f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
                   f" {np.mean(losses[-100:]) if len(losses)>0 else 0:.4f},"
-                  f"time per epoch {time_per_epoch:.2f}, time elapsed {int(timeTaken/3600)}:"
-                  f"{((timeTaken/3600)%1)*60:.0f}, est time remaining: {hours}:{mins:.0f}\r")
+                  f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(timeTaken/3600)}:"
+                  f"{((timeTaken/3600)%1)*60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r")
 
         if epoch % 1000 ==0 and epoch >= 0:
             save(diffusion=diffusion, args=args, optimiser=optimiser,final=False,ema=ema,epoch=epoch)

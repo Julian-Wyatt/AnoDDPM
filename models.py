@@ -479,6 +479,9 @@ class GaussianDiffusion:
         self.loss_weight = loss_weight
         alphas = 1 - betas
         self.betas = betas
+        self.sqrt_minus_one_betas = np.sqrt(1-betas)
+        self.sqrt_betas = np.sqrt(betas)
+
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
         self.alphas_cumprod_prev = np.append(1.0,self.alphas_cumprod[:-1])
         # self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:],0.0)
@@ -600,8 +603,8 @@ class GaussianDiffusion:
 
     #TODO: curious whether noise needs to be the same across every t here
     def sample_q_gradual(self, x, t, noise):
-        return (extract(np.sqrt(1-self.betas[t]), t, x.shape, x.device) * x +
-                extract(np.sqrt(self.betas[t]), t, x.shape, x.device) * noise)
+        return (extract(self.sqrt_minus_one_betas, t, x.shape, x.device) * x +
+                extract(self.sqrt_betas, t, x.shape, x.device) * noise)
 
     def calc_loss(self, model, x, t):
         noise = torch.randn_like(x)
