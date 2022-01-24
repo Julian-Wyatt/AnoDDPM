@@ -601,7 +601,7 @@ class GaussianDiffusion:
     #TODO: curious whether noise needs to be the same across every t here
     def sample_q_gradual(self, x, t, noise):
         return (extract(np.sqrt(1-self.betas[t]), t, x.shape, x.device) * x +
-                extract(self.betas[t], t, x.shape, x.device) * noise)
+                extract(np.sqrt(self.betas[t]), t, x.shape, x.device) * noise)
 
     def calc_loss(self, model, x, t):
         noise = torch.randn_like(x)
