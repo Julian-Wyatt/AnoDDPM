@@ -2,11 +2,13 @@
 import math
 from abc import abstractmethod
 
-import torch
-from torch import nn
-import torch.nn.functional as F
 import numpy as np
-import tqdm.auto
+import torch
+import torch.nn.functional as F
+from perlin_numpy import generate_fractal_noise_2d
+from torch import nn
+
+from simplex import Simplex_CLASS
 
 
 class TimestepBlock(nn.Module):
@@ -59,16 +61,16 @@ class PositionalEmbedding(nn.Module):
 
 
 class Downsample(nn.Module):
-    def __init__(self, in_channels, use_conv,out_channels=None):
+    def __init__(self, in_channels, use_conv, out_channels=None):
         super().__init__()
         self.channels = in_channels
-        out_channels  = out_channels or in_channels
+        out_channels = out_channels or in_channels
         if use_conv:
             # downsamples by 1/2
             self.downsample = nn.Conv2d(in_channels, out_channels, 3, stride=2, padding=1)
         else:
             assert in_channels == out_channels
-            self.downsample = nn.AvgPool2d(kernel_size=2,stride=2)
+            self.downsample = nn.AvgPool2d(kernel_size=2, stride=2)
 
     def forward(self, x, time_embed=None):
         assert x.shape[1] == self.channels
@@ -87,7 +89,7 @@ class Upsample(nn.Module):
 
     def forward(self, x, time_embed=None):
         assert x.shape[1] == self.channels
-        x = F.interpolate(x,scale_factor=2, mode="nearest")
+        x = F.interpolate(x, scale_factor=2, mode="nearest")
         if self.use_conv:
             x = self.conv(x)
         return x
@@ -99,10 +101,11 @@ class AttentionBlock(nn.Module):
     Originally ported from here, but adapted to the N-d case.
     https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
     """
+
     def __init__(self, in_channels, n_heads=1, n_head_channels=-1):
         super().__init__()
         self.in_channels = in_channels
-        self.norm = GroupNorm32(32,self.in_channels)
+        self.norm = GroupNorm32(32, self.in_channels)
         if n_head_channels == -1:
             self.num_heads = n_heads
         else:
@@ -116,13 +119,13 @@ class AttentionBlock(nn.Module):
         self.attention = QKVAttention(self.num_heads)
         self.proj_out = zero_module(nn.Conv1d(in_channels, in_channels, 1))
 
-    def forward(self, x,time=None):
-        b,c,*spatial = x.shape
-        x = x.reshape(b,c,-1)
+    def forward(self, x, time=None):
+        b, c, *spatial = x.shape
+        x = x.reshape(b, c, -1)
         qkv = self.to_qkv(self.norm(x))
         h = self.attention(qkv)
         h = self.proj_out(h)
-        return (x+h).reshape(b,c,*spatial)
+        return (x + h).reshape(b, c, *spatial)
 
 
 class QKVAttention(nn.Module):
@@ -146,35 +149,36 @@ class QKVAttention(nn.Module):
         q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
         scale = 1 / math.sqrt(math.sqrt(ch))
         weight = torch.einsum(
-            "bct,bcs->bts", q * scale, k * scale
-        )  # More stable with f16 than dividing afterwards
+                "bct,bcs->bts", q * scale, k * scale
+                )  # More stable with f16 than dividing afterwards
         weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
         a = torch.einsum("bts,bcs->bct", weight, v)
         return a.reshape(bs, -1, length)
 
 
 class ResBlock(TimestepBlock):
-    def __init__(self,
-                 in_channels,
-                 time_embed_dim,
-                 dropout,
-                 out_channels=None,
-                 use_conv = False,
-                 up=False,
-                 down=False
-                 ):
+    def __init__(
+            self,
+            in_channels,
+            time_embed_dim,
+            dropout,
+            out_channels=None,
+            use_conv=False,
+            up=False,
+            down=False
+            ):
         super().__init__()
         out_channels = out_channels or in_channels
         self.in_layers = nn.Sequential(
-            GroupNorm32(32, in_channels),
-            nn.SiLU(),
-            nn.Conv2d(in_channels, out_channels, 3, padding=1)
-        )
+                GroupNorm32(32, in_channels),
+                nn.SiLU(),
+                nn.Conv2d(in_channels, out_channels, 3, padding=1)
+                )
         self.updown = up or down
 
         if up:
-            self.h_upd = Upsample(in_channels,False)
-            self.x_upd = Upsample(in_channels,False)
+            self.h_upd = Upsample(in_channels, False)
+            self.x_upd = Upsample(in_channels, False)
         elif down:
             self.h_upd = Downsample(in_channels, False)
             self.x_upd = Downsample(in_channels, False)
@@ -182,25 +186,25 @@ class ResBlock(TimestepBlock):
             self.h_upd = self.x_upd = nn.Identity()
 
         self.embed_layers = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(time_embed_dim, out_channels)
-        )
+                nn.SiLU(),
+                nn.Linear(time_embed_dim, out_channels)
+                )
         self.out_layers = nn.Sequential(
-            GroupNorm32(32, out_channels),
-            nn.SiLU(),
-            nn.Dropout(p=dropout),
-            zero_module(nn.Conv2d(out_channels, out_channels, 3, padding=1))
-        )
+                GroupNorm32(32, out_channels),
+                nn.SiLU(),
+                nn.Dropout(p=dropout),
+                zero_module(nn.Conv2d(out_channels, out_channels, 3, padding=1))
+                )
         if out_channels == in_channels:
             self.skip_connection = nn.Identity()
         elif use_conv:
-            self.skip_connection = nn.Conv2d(in_channels,out_channels,3,padding=1)
+            self.skip_connection = nn.Conv2d(in_channels, out_channels, 3, padding=1)
         else:
             self.skip_connection = nn.Conv2d(in_channels, out_channels, 1)
 
     def forward(self, x, time_embed):
         if self.updown:
-            in_rest, in_conv = self.in_layers[:-1],self.in_layers[-1]
+            in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
             h = in_rest(x)
             h = self.h_upd(h)
             x = self.x_upd(x)
@@ -223,14 +227,14 @@ class UNet(nn.Module):
             img_size,
             base_channels,
             conv_resample=True,
-            n_heads = 1,
-            n_head_channels =-1,
+            n_heads=1,
+            n_head_channels=-1,
             channel_mults="",
-            num_res_blocks =2,
+            num_res_blocks=2,
             dropout=0,
             attention_resolutions="32,16,8",
             biggan_updown=True,
-    ):
+            ):
         self.dtype = torch.float32
         super().__init__()
 
@@ -247,7 +251,7 @@ class UNet(nn.Module):
                 raise ValueError(f"unsupported image size: {img_size}")
         attention_ds = []
         for res in attention_resolutions.split(","):
-            attention_ds.append(img_size//int(res))
+            attention_ds.append(img_size // int(res))
 
         self.image_size = img_size
         self.in_channels = 1
@@ -263,81 +267,80 @@ class UNet(nn.Module):
         self.num_heads = n_heads
         self.num_head_channels = n_head_channels
 
-
-
         time_embed_dim = base_channels * 4
         self.time_embedding = nn.Sequential(
-            PositionalEmbedding(base_channels, 1),
-            nn.Linear(base_channels, time_embed_dim),
-            nn.SiLU(),
-            nn.Linear(time_embed_dim, time_embed_dim),
-        )
+                PositionalEmbedding(base_channels, 1),
+                nn.Linear(base_channels, time_embed_dim),
+                nn.SiLU(),
+                nn.Linear(time_embed_dim, time_embed_dim),
+                )
 
-
-        ch  = int(channel_mults[0] * base_channels)
-        self.down = nn.ModuleList([TimestepEmbedSequential(nn.Conv2d(self.in_channels, base_channels, 3, padding=1))])
+        ch = int(channel_mults[0] * base_channels)
+        self.down = nn.ModuleList(
+                [TimestepEmbedSequential(nn.Conv2d(self.in_channels, base_channels, 3, padding=1))]
+                )
         channels = [ch]
-        ds=1
+        ds = 1
         for i, mult in enumerate(channel_mults):
             # out_channels = base_channels * mult
 
             for _ in range(num_res_blocks):
                 layers = [ResBlock(
-                    ch,
-                    time_embed_dim=time_embed_dim,
-                    out_channels = base_channels * mult,
-                    dropout = dropout,
-                )]
+                        ch,
+                        time_embed_dim=time_embed_dim,
+                        out_channels=base_channels * mult,
+                        dropout=dropout,
+                        )]
                 ch = base_channels * mult
                 # channels.append(ch)
 
                 if ds in attention_ds:
                     layers.append(
-                        AttentionBlock(
-                            ch,
-                            n_heads=n_heads,
-                            n_head_channels=n_head_channels,
-                        )
-                    )
+                            AttentionBlock(
+                                    ch,
+                                    n_heads=n_heads,
+                                    n_head_channels=n_head_channels,
+                                    )
+                            )
                 self.down.append(TimestepEmbedSequential(*layers))
                 channels.append(ch)
             if i != len(channel_mults) - 1:
                 out_channels = ch
                 self.down.append(
-                    TimestepEmbedSequential(
-                        ResBlock(
-                            ch,
-                            time_embed_dim=time_embed_dim,
-                            out_channels=out_channels,
-                            dropout=dropout,
-                            down=True
+                        TimestepEmbedSequential(
+                                ResBlock(
+                                        ch,
+                                        time_embed_dim=time_embed_dim,
+                                        out_channels=out_channels,
+                                        dropout=dropout,
+                                        down=True
+                                        )
+                                if biggan_updown
+                                else
+                                Downsample(ch, conv_resample, out_channels=out_channels)
+                                )
                         )
-                        if biggan_updown
-                        else
-                        Downsample(ch, conv_resample, out_channels=out_channels)
-                    )
-                )
-                ds*=2
+                ds *= 2
                 ch = out_channels
                 channels.append(ch)
 
         self.middle = TimestepEmbedSequential(
-            ResBlock(
-                ch,
-                time_embed_dim=time_embed_dim,
-                dropout=dropout
-            ),
-            AttentionBlock(
-                ch,
-                n_heads=n_heads,
-                n_head_channels=n_head_channels
-            ),
-            ResBlock(
-                ch,
-                time_embed_dim=time_embed_dim,
-                dropout=dropout
-            )
-        )
+                ResBlock(
+                        ch,
+                        time_embed_dim=time_embed_dim,
+                        dropout=dropout
+                        ),
+                AttentionBlock(
+                        ch,
+                        n_heads=n_heads,
+                        n_head_channels=n_head_channels
+                        ),
+                ResBlock(
+                        ch,
+                        time_embed_dim=time_embed_dim,
+                        dropout=dropout
+                        )
+                )
         self.up = nn.ModuleList([])
 
         for i, mult in reversed(list(enumerate(channel_mults))):
@@ -345,44 +348,44 @@ class UNet(nn.Module):
                 inp_chs = channels.pop()
                 layers = [
                     ResBlock(
-                        ch+inp_chs,
-                        time_embed_dim=time_embed_dim,
-                        out_channels=base_channels * mult,
-                        dropout=dropout
-                    )
-                ]
+                            ch + inp_chs,
+                            time_embed_dim=time_embed_dim,
+                            out_channels=base_channels * mult,
+                            dropout=dropout
+                            )
+                    ]
                 ch = base_channels * mult
                 if ds in attention_ds:
                     layers.append(
-                        AttentionBlock(
-                            ch,
-                            n_heads=n_heads,
-                            n_head_channels=n_head_channels
-                        ),
-                    )
+                            AttentionBlock(
+                                    ch,
+                                    n_heads=n_heads,
+                                    n_head_channels=n_head_channels
+                                    ),
+                            )
 
                 if i and j == num_res_blocks:
                     out_channels = ch
                     layers.append(
-                        ResBlock(
-                            ch,
-                            time_embed_dim=time_embed_dim,
-                            out_channels=out_channels,
-                            dropout=dropout,
-                            up=True
-                        )
-                        if biggan_updown
-                        else
-                        Upsample(ch, conv_resample, out_channels=out_channels)
-                    )
-                    ds//=2
+                            ResBlock(
+                                    ch,
+                                    time_embed_dim=time_embed_dim,
+                                    out_channels=out_channels,
+                                    dropout=dropout,
+                                    up=True
+                                    )
+                            if biggan_updown
+                            else
+                            Upsample(ch, conv_resample, out_channels=out_channels)
+                            )
+                    ds //= 2
                 self.up.append(TimestepEmbedSequential(*layers))
 
         self.out = nn.Sequential(
-            GroupNorm32(32,ch),
-            nn.SiLU(),
-            zero_module(nn.Conv2d(base_channels*channel_mults[0], self.out_channels, 3, padding=1))
-        )
+                GroupNorm32(32, ch),
+                nn.SiLU(),
+                zero_module(nn.Conv2d(base_channels * channel_mults[0], self.out_channels, 3, padding=1))
+                )
 
     def forward(self, x, time):
 
@@ -391,11 +394,11 @@ class UNet(nn.Module):
         skips = []
 
         h = x.type(self.dtype)
-        for i,module in enumerate(self.down):
+        for i, module in enumerate(self.down):
             h = module(h, time_embed)
             skips.append(h)
-        h = self.middle(h,time_embed)
-        for i,module in enumerate(self.up):
+        h = self.middle(h, time_embed)
+        for i, module in enumerate(self.up):
             h = torch.cat([h, skips.pop()], dim=1)
             h = module(h, time_embed)
         h = h.type(x.dtype)
@@ -417,11 +420,11 @@ def zero_module(module):
     return module
 
 
-def update_ema_params(target,source,decay_rate=0.9999):
+def update_ema_params(target, source, decay_rate=0.9999):
     targParams = dict(target.named_parameters())
     srcParams = dict(source.named_parameters())
     for k in targParams:
-        targParams[k].data.mul_(decay_rate).add_(srcParams[k].data,alpha=1-decay_rate)
+        targParams[k].data.mul_(decay_rate).add_(srcParams[k].data, alpha=1 - decay_rate)
 
 
 def get_beta_schedule(num_diffusion_steps, name="cosine"):
@@ -452,7 +455,7 @@ def extract(arr, timesteps, broadcast_shape, device):
 
 
 def mean_flat(tensor):
-    return torch.mean(tensor, dim=list(range(1,len(tensor.shape))))
+    return torch.mean(tensor, dim=list(range(1, len(tensor.shape))))
 
 
 class GaussianDiffusion:
@@ -462,9 +465,25 @@ class GaussianDiffusion:
             betas,
             img_channels=1,
             loss_type="l2",
-            loss_weight='none', #prop t / uniform / None
+            loss_weight='none',  # prop t / uniform / None
+            noise="gauss"  # gauss / perlin / simplex
             ):
         super().__init__()
+        if noise == "gauss":
+            self.noise_fn = lambda x, t: torch.randn_like(x)
+        elif noise == "perlin":
+            self.noise_fn = lambda x, t: torch.unsqueeze(
+                    torch.from_numpy(
+                            generate_fractal_noise_2d(img_size, (4, 4), 6, 0.6)
+                            ), 0
+                    ).repeat(x.shape[0])
+        else:
+            self.simplex = Simplex_CLASS()
+            self.noise_fn = lambda x, t: torch.unsqueeze(
+                    torch.from_numpy(
+                            self.simplex.rand_3d_fixed_T_octaves(x.shape[1:], t, 6, 0.6)
+                            ), 0
+                    ).repeat(x.shape[0])
 
         self.img_size = img_size
         self.img_channels = img_channels
@@ -472,18 +491,18 @@ class GaussianDiffusion:
         self.num_timesteps = len(betas)
 
         if loss_weight == 'prop-t':
-            self.weights = np.arange(self.num_timesteps,0,-1)
-        elif loss_weight =="uniform":
+            self.weights = np.arange(self.num_timesteps, 0, -1)
+        elif loss_weight == "uniform":
             self.weights = np.ones(self.num_timesteps)
 
         self.loss_weight = loss_weight
         alphas = 1 - betas
         self.betas = betas
-        self.sqrt_minus_one_betas = np.sqrt(1-betas)
+        self.sqrt_alphas = np.sqrt(alphas)
         self.sqrt_betas = np.sqrt(betas)
 
         self.alphas_cumprod = np.cumprod(alphas, axis=0)
-        self.alphas_cumprod_prev = np.append(1.0,self.alphas_cumprod[:-1])
+        self.alphas_cumprod_prev = np.append(1.0, self.alphas_cumprod[:-1])
         # self.alphas_cumprod_next = np.append(self.alphas_cumprod[1:],0.0)
 
 
@@ -501,8 +520,8 @@ class GaussianDiffusion:
         # log calculation clipped because the posterior variance is 0 at the
         # beginning of the diffusion chain.
         self.posterior_log_variance_clipped = np.log(
-            np.append(self.posterior_variance[1], self.posterior_variance[1:])
-        )
+                np.append(self.posterior_variance[1], self.posterior_variance[1:])
+                )
         self.posterior_mean_coef1 = (
                 betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         )
@@ -513,60 +532,67 @@ class GaussianDiffusion:
         )
 
 
-    def sample_t_with_weights(self,b_size,device):
+    def sample_t_with_weights(self, b_size, device):
         p = self.weights / np.sum(self.weights)
-        indices_np = np.random.choice(len(p),size=b_size,p=p)
+        indices_np = np.random.choice(len(p), size=b_size, p=p)
         indices = torch.from_numpy(indices_np).long().to(device)
-        weights_np = 1/len(p)*p[indices_np]
+        weights_np = 1 / len(p) * p[indices_np]
         weights = torch.from_numpy(weights_np).float().to(device)
         return indices, weights
 
     def predict_x_0_from_eps(self, x_t, t, eps):
-        return (extract(self.sqrt_recip_alphas_cumprod, t,x_t.shape, x_t.device) * x_t
-                - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape, x_t.device)*eps)
+        return (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape, x_t.device) * x_t
+                - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape, x_t.device) * eps)
 
 
-    def p_mean_variance(self,model,x_t,t):
-        model_output = model(x_t,t)
+    def q_posterior_mean_variance(self, x_0, x_t, t):
+        """
+        Compute the mean and variance of the diffusion posterior:
+            q(x_{t-1} | x_t, x_0)
+        """
 
-        model_var = np.append(self.posterior_variance[1],self.betas[1:])
-        model_logvar = np.log(model_var)
-        model_var = extract(model_var, t, x_t.shape, x_t.device)
-        model_logvar = extract(model_logvar, t, x_t.shape, x_t.device)
-
-        pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1,1), t, model_output)
-        model_mean, _, _ = self.q_posterior_mean_variance(
-            pred_x_0, x_t, t
-        )
-        return {
-            "mean": model_mean,
-            "variance": model_var,
-            "log_variance": model_logvar,
-            "pred_x_0": pred_x_0,
-        }
-
-    def sample_p(self,model,x_t, t):
-        out = self.p_mean_variance(model,x_t,t)
-        noise = torch.randn_like(x_t)
-
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
-        )
-        sample = out["mean"] + nonzero_mask * torch.exp(0.5*out["log_variance"])*noise
-        return {"sample":sample,"pred_x_0":out["pred_x_0"]}
-
-    def q_posterior_mean_variance(self,x_0, x_t, t):
         # mu (x_t,x_0) = \frac{\sqrt{alphacumprod prev} betas}{1-alphacumprod} *x_0
         # + \frac{\sqrt{alphas}(1-alphacumprod prev)}{ 1- alphacumprod} * x_t
         posterior_mean = (extract(self.posterior_mean_coef1, t, x_t.shape, x_t.device) * x_0
-                          + extract(self.posterior_mean_coef2, t, x_t.shape, x_t.device)*x_t)
+                          + extract(self.posterior_mean_coef2, t, x_t.shape, x_t.device) * x_t)
 
         # var = \frac{1-alphacumprod prev}{1-alphacumprod} * betas
         posterior_var = extract(self.posterior_variance, t, x_t.shape, x_t.device)
         posterior_log_var_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape, x_t.device)
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
-    def forward_backward(self,model, x, see_whole_sequence="half",t_distance=None):
+    def p_mean_variance(self, model, x_t, t):
+        model_output = model(x_t, t)
+
+        model_var = np.append(self.posterior_variance[1], self.betas[1:])
+        model_logvar = np.log(model_var)
+        model_var = extract(model_var, t, x_t.shape, x_t.device)
+        model_logvar = extract(model_logvar, t, x_t.shape, x_t.device)
+
+        pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1, 1), t, model_output)
+        model_mean, _, _ = self.q_posterior_mean_variance(
+                pred_x_0, x_t, t
+                )
+        return {
+            "mean":         model_mean,
+            "variance":     model_var,
+            "log_variance": model_logvar,
+            "pred_x_0":     pred_x_0,
+            }
+
+    def sample_p(self, model, x_t, t):
+        out = self.p_mean_variance(model, x_t, t)
+        # noise = torch.randn_like(x_t)
+        noise = self.noise_fn(x_t, t)
+
+        nonzero_mask = (
+            (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
+        )
+        sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
+        return {"sample": sample, "pred_x_0": out["pred_x_0"]}
+
+
+    def forward_backward(self, model, x, see_whole_sequence="half", t_distance=None):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
         if t_distance is None:
@@ -574,22 +600,27 @@ class GaussianDiffusion:
         seq = [x.cpu().detach()]
         if see_whole_sequence == "whole":
 
-            for t in range(1,int(t_distance)):
+            for t in range(1, int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
-                noise = torch.randn_like(x)
+                # noise = torch.randn_like(x)
+                noise = self.noise_fn(x, t)
                 with torch.no_grad():
                     x = self.sample_q_gradual(x, t_batch, noise)
 
                 seq.append(x.cpu().detach())
         else:
-            x = self.sample_q(x,torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),torch.randn_like(x))
-            if see_whole_sequence=="half":
+            # x = self.sample_q(x,torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),torch.randn_like(x))
+            x = self.sample_q(
+                    x, torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),
+                    self.noise_fn(x, t_distance)
+                    )
+            if see_whole_sequence == "half":
                 seq.append(x.cpu().detach())
 
-        for t in range(int(t_distance) -1, -1, -1):
+        for t in range(int(t_distance) - 1, -1, -1):
             t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
             with torch.no_grad():
-                out = self.sample_p(model,x,t_batch)
+                out = self.sample_p(model, x, t_batch)
                 x = out["sample"]
             if see_whole_sequence:
                 seq.append(x.cpu().detach())
@@ -597,18 +628,32 @@ class GaussianDiffusion:
         return x.cpu().detach() if not see_whole_sequence else seq
 
 
-    def sample_q(self, x, t, noise):
-        return (extract(self.sqrt_alphas_cumprod, t, x.shape, x.device) * x +
-                extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape, x.device) * noise)
+    def sample_q(self, x_0, t, noise):
+        """
+        q (x_t | x_0 )
+        :param x:
+        :param t:
+        :param noise:
+        :return:
+        """
+        return (extract(self.sqrt_alphas_cumprod, t, x_0.shape, x_0.device) * x_0 +
+                extract(self.sqrt_one_minus_alphas_cumprod, t, x_0.shape, x_0.device) * noise)
 
-    #TODO: curious whether noise needs to be the same across every t here
-    def sample_q_gradual(self, x, t, noise):
-        return (extract(self.sqrt_minus_one_betas, t, x.shape, x.device) * x +
-                extract(self.sqrt_betas, t, x.shape, x.device) * noise)
+    # TODO: curious whether noise needs to be the same across every t here
+    def sample_q_gradual(self, x_t, t, noise):
+        """
+        q (x_t | x_{t-1})
+        :param x:
+        :param t:
+        :param noise:
+        :return:
+        """
+        return (extract(self.sqrt_alphas, t, x_t.shape, x_t.device) * x_t +
+                extract(self.sqrt_betas, t, x_t.shape, x_t.device) * noise)
 
     def calc_loss(self, model, x, t):
-        noise = torch.randn_like(x)
-
+        # noise = torch.randn_like(x)
+        noise = self.noise_fn(x, t)
         noisy_x = self.sample_q(x, t, noise)
         estimate_noise = model(noisy_x, t)
 
@@ -622,13 +667,16 @@ class GaussianDiffusion:
     def p_loss(self, model, x, args):
         if self.loss_weight == "none":
             if args["train_start"]:
-                t,weights = torch.randint(0, min(args["sample_distance"]*2,self.num_timesteps), (x.shape[0],), device=x.device),1
+                t = torch.randint(
+                        0, min(args["sample_distance"] * 2, self.num_timesteps), (x.shape[0],),
+                        device=x.device
+                        )
             else:
-                t, weights = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device), 1
+                t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device)
+            weights = 1
         else:
-            t, weights = self.sample_t_with_weights(x.shape[0],x.device)
+            t, weights = self.sample_t_with_weights(x.shape[0], x.device)
 
         loss = self.calc_loss(model, x, t)
-        loss = ((loss[0]*weights).mean(),loss[1],loss[2])
+        loss = ((loss[0] * weights).mean(), loss[1], loss[2])
         return loss
-
