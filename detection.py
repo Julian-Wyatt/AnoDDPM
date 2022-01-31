@@ -1,26 +1,29 @@
+import os
 import random
+import sys
 
-import numpy as np
+import matplotlib.animation as animation
 # import matplotlib
 # matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import os
-import matplotlib.animation as animation
-import dataset
+import numpy as np
 import torch
-import sys
-import time
+
+import dataset
 from diffusion import init_dataset_loader, output_img
-from models import UNet, GaussianDiffusion, get_beta_schedule
+from models import GaussianDiffusion, get_beta_schedule, UNet
 
-np.set_printoptions(edgeitems=30, linewidth=100000,
-    formatter=dict(float=lambda x: "%.3g" % x))
+np.set_printoptions(
+        edgeitems=30, linewidth=100000,
+        formatter=dict(float=lambda x: "%.3g" % x)
+        )
 
-def detect(image,diffusion):
 
+def detect(image, diffusion):
     pass
 
-def heatmap(real:torch.Tensor,recon:torch.Tensor):
+
+def heatmap(real: torch.Tensor, recon: torch.Tensor):
     diff = real - recon
 
     pass
@@ -34,7 +37,7 @@ if __name__ == "__main__":
     if ".DS_Store" in params:
         params.remove(".DS_Store")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset_path = './Cancerous Dataset/EdinburghDataset/Anomalous/raw'
+    dataset_path = './CancerousDataset/EdinburghDataset/Anomalous/raw'
 
     for param in params:
         try:
@@ -66,6 +69,7 @@ if __name__ == "__main__":
                   "arg_num":4
                 }
 
+        print(f"args{args['arg_num']}")
         unet = UNet(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
 
         betas = get_beta_schedule(args['T'], args['beta_schedule'])
@@ -74,6 +78,7 @@ if __name__ == "__main__":
                                       loss_type=args['loss-type'])
 
         unet.load_state_dict(output["ema"])
+        unet.to(device)
 
         AnoDataset = dataset.AnomalousMRIDataset(ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
                                               slice_selection="random")
@@ -84,18 +89,21 @@ if __name__ == "__main__":
         except OSError:
             pass
 
-        for epoch in range(4):
+        for epoch in range(1):
             for i in range(len(AnoDataset)):
                 new = next(loader)
                 img = new["image"][0].to(device)
-                output = diff.forward_backward(unet,img,see_whole_sequence="whole",t_distance=25)
+                timestep = random.randint(30, args["sample_distance"] * 2)
+                output = diff.forward_backward(unet, img, see_whole_sequence="whole", t_distance=timestep)
                 fig, ax = plt.subplots()
 
                 plt.rcParams['figure.dpi'] = 200
 
                 imgs = [[ax.imshow(output_img(x, 1), animated=True)] for x in output]
-                ani = animation.ArtistAnimation(fig, imgs, interval=100, blit=True,
-                                                repeat_delay=1000)
+                ani = animation.ArtistAnimation(
+                        fig, imgs, interval=100, blit=True,
+                        repeat_delay=1000
+                        )
 
                 try:
                     os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
@@ -104,11 +112,12 @@ if __name__ == "__main__":
 
                 temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
 
-                output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/{len(temp)+1}.mp4'
+                output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/t={timestep}-attemp' \
+                              f't={len(temp) + 1}.mp4'
                 if "slices" in new:
                     output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
-                                  f'{new["filenames"][0][-9:-4]}/slices={new["slices"]}-attempt{len(temp)+1}.mp4'
+                                  f'{new["filenames"][0][-9:-4]}/slices={new["slices"].tolist()}-t={timestep}-attemp' \
+                                  f't={len(temp) + 1}.mp4'
                 ani.save(output_name)
 
                 plt.close('all')
-
