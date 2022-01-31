@@ -474,16 +474,16 @@ class GaussianDiffusion:
         elif noise == "perlin":
             self.noise_fn = lambda x, t: torch.unsqueeze(
                     torch.from_numpy(
-                            generate_fractal_noise_2d(img_size, (4, 4), 6, 0.6)
-                            ), 0
-                    ).repeat(x.shape[0])
+                            generate_fractal_noise_2d(img_size, (4, 4), 6, 0.6),
+                            ).to(x.device), 0
+                    ).repeat(x.shape[0], 1, 1, 1)
         else:
             self.simplex = Simplex_CLASS()
             self.noise_fn = lambda x, t: torch.unsqueeze(
                     torch.from_numpy(
-                            self.simplex.rand_3d_fixed_T_octaves(x.shape[1:], t, 6, 0.6)
-                            ), 0
-                    ).repeat(x.shape[0])
+                            self.simplex.rand_3d_fixed_T_octaves(img_size, t.detach().cpu().numpy(), 6, 0.6)
+                            ).to(x.device), 0
+                    ).repeat(x.shape[0], 1, 1, 1)
 
         self.img_size = img_size
         self.img_channels = img_channels
@@ -583,7 +583,7 @@ class GaussianDiffusion:
     def sample_p(self, model, x_t, t):
         out = self.p_mean_variance(model, x_t, t)
         # noise = torch.randn_like(x_t)
-        noise = self.noise_fn(x_t, t)
+        noise = self.noise_fn(x_t, t).float()
 
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
@@ -603,16 +603,17 @@ class GaussianDiffusion:
             for t in range(1, int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 # noise = torch.randn_like(x)
-                noise = self.noise_fn(x, t)
+                noise = self.noise_fn(x, t_batch).float()
                 with torch.no_grad():
                     x = self.sample_q_gradual(x, t_batch, noise)
 
                 seq.append(x.cpu().detach())
         else:
             # x = self.sample_q(x,torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),torch.randn_like(x))
+            t_tensor = torch.tensor([t_distance], device=x.device).repeat(x.shape[0])
             x = self.sample_q(
-                    x, torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),
-                    self.noise_fn(x, t_distance)
+                    x, t_tensor,
+                    self.noise_fn(x, t_tensor).float()
                     )
             if see_whole_sequence == "half":
                 seq.append(x.cpu().detach())
@@ -653,7 +654,8 @@ class GaussianDiffusion:
 
     def calc_loss(self, model, x, t):
         # noise = torch.randn_like(x)
-        noise = self.noise_fn(x, t)
+
+        noise = self.noise_fn(x, t).float()
         noisy_x = self.sample_q(x, t, noise)
         estimate_noise = model(noisy_x, t)
 
@@ -668,7 +670,7 @@ class GaussianDiffusion:
         if self.loss_weight == "none":
             if args["train_start"]:
                 t = torch.randint(
-                        0, min(args["sample_distance"] * 2, self.num_timesteps), (x.shape[0],),
+                        0, min(args["sample_distance"], self.num_timesteps), (x.shape[0],),
                         device=x.device
                         )
             else:
