@@ -28,6 +28,7 @@ def heatmap(real: torch.Tensor, recon: torch.Tensor):
 
     pass
 
+
 if __name__ == "__main__":
 
     if len(sys.argv[1:]) > 0:
@@ -50,23 +51,23 @@ if __name__ == "__main__":
             args = output["args"]
         else:
             args = {
-                  "img_size": [256,256],
-                  "Batch_Size": 1,
-                  "EPOCHS": 10000,
-                  "T": 1000,
-                  "base_channels": 128,
-                  "beta_schedule": "linear",
-                  "channel_mults": "",
-                  "loss-type": "l2",
-                  "loss_weight": "none",
-                  "lr": 0.0001,
-                  "random_slice": False,
-                  "sample_distance": 40,
-                  "weight_decay": 0.0,
-                  "save_imgs": False,
-                  "save_vids": True,
-                  "train_start": True,
-                  "arg_num":4
+                "img_size":        [256, 256],
+                "Batch_Size":      1,
+                "EPOCHS":          10000,
+                "T":               1000,
+                "base_channels":   128,
+                "beta_schedule":   "linear",
+                "channel_mults":   "",
+                "loss-type":       "l2",
+                "loss_weight":     "none",
+                "lr":              0.0001,
+                "random_slice":    False,
+                "sample_distance": 40,
+                "weight_decay":    0.0,
+                "save_imgs":       False,
+                "save_vids":       True,
+                "train_start":     True,
+                "arg_num":         4
                 }
 
         print(f"args{args['arg_num']}")
@@ -74,15 +75,19 @@ if __name__ == "__main__":
 
         betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
-        diff = GaussianDiffusion(args['img_size'], betas, loss_weight=args['loss_weight'],
-                                      loss_type=args['loss-type'])
+        diff = GaussianDiffusion(
+                args['img_size'], betas, loss_weight=args['loss_weight'],
+                loss_type=args['loss-type']
+                )
 
         unet.load_state_dict(output["ema"])
         unet.to(device)
 
-        AnoDataset = dataset.AnomalousMRIDataset(ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
-                                              slice_selection="random")
-        loader = init_dataset_loader(AnoDataset,args)
+        AnoDataset = dataset.AnomalousMRIDataset(
+                ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
+                slice_selection="random"
+                )
+        loader = init_dataset_loader(AnoDataset, args)
 
         try:
             os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous')

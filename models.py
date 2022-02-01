@@ -631,26 +631,30 @@ class GaussianDiffusion:
 
     def sample_q(self, x_0, t, noise):
         """
-        q (x_t | x_0 )
-        :param x:
-        :param t:
-        :param noise:
-        :return:
+            q (x_t | x_0 )
+
+            :param x_0:
+            :param t:
+            :param noise:
+            :return:
         """
         return (extract(self.sqrt_alphas_cumprod, t, x_0.shape, x_0.device) * x_0 +
                 extract(self.sqrt_one_minus_alphas_cumprod, t, x_0.shape, x_0.device) * noise)
 
     # TODO: curious whether noise needs to be the same across every t here
+
+
     def sample_q_gradual(self, x_t, t, noise):
         """
         q (x_t | x_{t-1})
-        :param x:
+        :param x_t:
         :param t:
         :param noise:
         :return:
         """
         return (extract(self.sqrt_alphas, t, x_t.shape, x_t.device) * x_t +
                 extract(self.sqrt_betas, t, x_t.shape, x_t.device) * noise)
+
 
     def calc_loss(self, model, x, t):
         # noise = torch.randn_like(x)
