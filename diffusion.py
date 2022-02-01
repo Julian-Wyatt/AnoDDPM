@@ -32,7 +32,7 @@ def output_img(img, row_size=-1):
             )
 
 
-def train(training_dataset_loader, testing_dataset_loader, args):
+def train(training_dataset_loader, testing_dataset_loader, args, resume):
     model = UNet(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
                 "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
@@ -45,15 +45,29 @@ def train(training_dataset_loader, testing_dataset_loader, args):
             loss_type=args['loss-type'], noise=args["noise_fn"]
             )
 
-    ema = copy.deepcopy(model)
-
     optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'], betas=(0.9, 0.999))
+
+    if resume:
+        if "unet" in resume:
+            model.load_state_dict(resume["unet"])
+        else:
+            model.load_state_dict(resume["ema"])
+        ema = UNet(
+                args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
+                    "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
+                )
+        ema.load_state_dict(resume["ema"])
+        optimiser.load_state_dict(resume["optimizer_state_dict"])
+
+        tqdm_epoch = range(resume['n_epoch'], args['EPOCHS'] + 1)
+    else:
+        ema = copy.deepcopy(model)
+        tqdm_epoch = range(args['EPOCHS'] + 1)
+
     startTime = time.time()
     losses = []
     # tqdm_epoch = tqdm.trange(args['EPOCHS'])
-    tqdm_epoch = range(args['EPOCHS'] + 1)
     # dataset loop
-    last100Loss = []
     for epoch in tqdm_epoch:
         mean_loss = []
         for i in range(100 // args['Batch_Size']):
@@ -97,9 +111,9 @@ def train(training_dataset_loader, testing_dataset_loader, args):
                     )
 
         if epoch % 1000 == 0 and epoch >= 0:
-            save(diffusion=diffusion, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
+            save(unet=model, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
 
-    save(diffusion=diffusion, args=args, optimiser=optimiser, final=True, ema=ema)
+    save(unet=model, args=args, optimiser=optimiser, final=True, ema=ema)
 
     testing(testing_dataset_loader, diffusion, ema=ema, args=args, device=device)
 
@@ -126,21 +140,12 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
         print(f"saved {i}")
 
 
-def save(final, diffusion, optimiser, args, ema, loss=0, epoch=0):
-    try:
-        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}')
-    except OSError:
-        pass
-    try:
-        os.makedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
-    except OSError:
-        pass
-
+def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
     if final:
         torch.save(
                 {
                     'n_epoch':              args["EPOCHS"],
-                    # 'model_state_dict': diffusion.state_dict(),
+                    'model_state_dict':     unet.state_dict(),
                     'optimizer_state_dict': optimiser.state_dict(),
                     "ema":                  ema.state_dict(),
                     "args":                 args
@@ -151,7 +156,7 @@ def save(final, diffusion, optimiser, args, ema, loss=0, epoch=0):
         torch.save(
                 {
                     'n_epoch':              epoch,
-                    # 'model_state_dict': diffusion.state_dict(),
+                    'model_state_dict':     unet.state_dict(),
                     'optimizer_state_dict': optimiser.state_dict(),
                     "args":                 args,
                     "ema":                  ema.state_dict(),
@@ -264,17 +269,53 @@ if __name__ == '__main__':
     if len(sys.argv[1:]) > 0:
         files = sys.argv[1:]
     else:
-        files = os.listdir(f'{ROOT_DIR}test_args')
-    print(files)
-    for file in files:
-        if file[-5:] == ".json":
-            with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
-                args = json.load(f)
-            args['arg_num'] = file[4:-5]
-            args = defaultdict_from_json(args)
-            print(file, args)
-            training_dataset, testing_dataset = init_datasets(args)
-            training_dataset_loader = init_dataset_loader(training_dataset, args)
-            testing_dataset_loader = init_dataset_loader(testing_dataset, args)
-            # load, pass args
-            train(training_dataset_loader, testing_dataset_loader, args)
+        raise ValueError("Missing file argument")
+
+    resume = 0
+    if files[0] == "RESUME_RECENT":
+        resume = 1
+        files = files[1:]
+        if len(files) == 0:
+            raise ValueError("Missing file argument")
+    elif files[0] == "RESUME_FINAL":
+        resume = 2
+        files = files[1:]
+        if len(files) == 0:
+            raise ValueError("Missing file argument")
+
+    file = files[0]
+    if file[-5:] == ".json":
+        with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
+            args = json.load(f)
+        args['arg_num'] = file[4:-5]
+        args = defaultdict_from_json(args)
+        for i in [f'./model/diff-params-ARGS={args["arg_num"]}',
+                  f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint',
+                  f'./diffusion-videos/ARGS={args["arg_num"]}',
+                  f'./diffusion-training-images/ARGS={args["arg_num"]}']:
+            try:
+                os.makedirs(i)
+            except OSError:
+                pass
+        print(file, args)
+        training_dataset, testing_dataset = init_datasets(args)
+        training_dataset_loader = init_dataset_loader(training_dataset, args)
+        testing_dataset_loader = init_dataset_loader(testing_dataset, args)
+
+        if resume:
+            if resume == 1:
+                checkpoints = os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
+                checkpoints.sort()
+                file_dir = checkpoints[-1]
+            else:
+                file_dir = f'./model/diff-params-ARGS={args["arg_num"]}/params-final.pt'
+            loaded_model = torch.load(file_dir, map_location=device)
+        else:
+            loaded_model = {}
+        # load, pass args
+        train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
+
+        os.removedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
+
+    else:
+        raise ValueError("File Argument is not a json file")
