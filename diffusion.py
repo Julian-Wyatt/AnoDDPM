@@ -37,15 +37,13 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
                 "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
             )
-    model.to(device)
+
     betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
     diffusion = GaussianDiffusion(
             args['img_size'], betas, loss_weight=args['loss_weight'],
             loss_type=args['loss-type'], noise=args["noise_fn"]
             )
-
-    optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'], betas=(0.9, 0.999))
 
     if resume:
         if "unet" in resume:
@@ -57,13 +55,22 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
                     "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
                 )
         ema.load_state_dict(resume["ema"])
-        optimiser.load_state_dict(resume["optimizer_state_dict"])
+        start_epoch = resume['n_epoch']
 
-        tqdm_epoch = range(resume['n_epoch'], args['EPOCHS'] + 1)
     else:
+        start_epoch = 0
         ema = copy.deepcopy(model)
-        tqdm_epoch = range(args['EPOCHS'] + 1)
 
+    tqdm_epoch = range(start_epoch, args['EPOCHS'] + 1)
+
+    ema.to(device)
+    model.to(device)
+
+    optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'], betas=(0.9, 0.999))
+    if resume:
+        optimiser.load_state_dict(resume["optimizer_state_dict"])
+    # optimiser.to(device)
+    del resume
     startTime = time.time()
     losses = []
     # tqdm_epoch = tqdm.trange(args['EPOCHS'])
@@ -98,7 +105,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
         if epoch % 100 == 0:
             timeTaken = time.time() - startTime
             remaining_epochs = args['EPOCHS'] - epoch
-            time_per_epoch = timeTaken / (epoch + 1)
+            time_per_epoch = timeTaken / (epoch + 1 - start_epoch)
             hours = remaining_epochs * time_per_epoch / 3600
             mins = (hours % 1) * 60
             hours = int(hours)
@@ -302,16 +309,22 @@ if __name__ == '__main__':
         training_dataset_loader = init_dataset_loader(training_dataset, args)
         testing_dataset_loader = init_dataset_loader(testing_dataset, args)
 
+        loaded_model = {}
         if resume:
             if resume == 1:
                 checkpoints = os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
-                checkpoints.sort()
-                file_dir = checkpoints[-1]
+                checkpoints.sort(reverse=True)
+                for i in checkpoints:
+                    try:
+                        file_dir = f"./model/diff-params-ARGS={args['arg_num']}/checkpoint/{i}"
+                        loaded_model = torch.load(file_dir, map_location=device)
+                        break
+                    except RuntimeError:
+                        continue
+
             else:
                 file_dir = f'./model/diff-params-ARGS={args["arg_num"]}/params-final.pt'
-            loaded_model = torch.load(file_dir, map_location=device)
-        else:
-            loaded_model = {}
+                loaded_model = torch.load(file_dir, map_location=device)
         # load, pass args
         train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
 
