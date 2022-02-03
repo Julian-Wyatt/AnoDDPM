@@ -328,6 +328,8 @@ if __name__ == '__main__':
         # load, pass args
         train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
 
+        for f in os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint'):
+            os.remove(os.path.join(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint', f))
         os.removedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
 
     else:
