@@ -1,5 +1,6 @@
-# https://github.com/openai/guided-diffusion/blob/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924/guided_diffusion/gaussian_diffusion.py
+# https://github.com/openai/guided-diffusion/tree/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924
 import math
+import random
 from abc import abstractmethod
 
 import numpy as np
@@ -458,15 +459,90 @@ def mean_flat(tensor):
     return torch.mean(tensor, dim=list(range(1, len(tensor.shape))))
 
 
+def normal_kl(mean1, logvar1, mean2, logvar2):
+    """
+    Compute the KL Divergence between two gaussians
+
+    :param mean1:
+    :param logvar1:
+    :param mean2:
+    :param logvar2:
+    :return: KL Divergence between N(mean1,logvar1^2) & N(mean2,logvar2^2))
+    """
+    return 0.5 * (-1 + logvar2 - logvar1 + torch.exp(logvar1 - logvar2) + ((mean1 - mean2) ** 2) * torch.exp(-logvar2))
+
+
+def approx_standard_normal_cdf(x):
+    """
+    A fast approximation of the cumulative distribution function of the
+    standard normal.
+    """
+    return 0.5 * (1.0 + torch.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * torch.pow(x, 3))))
+
+
+def discretised_gaussian_log_likelihood(x, means, log_scales):
+    """
+        Compute the log-likelihood of a Gaussian distribution discretizing to a
+        given image.
+        :param x: the target images. It is assumed that this was uint8 values,
+                  rescaled to the range [-1, 1].
+        :param means: the Gaussian mean Tensor.
+        :param log_scales: the Gaussian log stddev Tensor.
+        :return: a tensor like x of log probabilities (in nats).
+        """
+    assert x.shape == means.shape == log_scales.shape
+    centered_x = x - means
+    inv_stdv = torch.exp(-log_scales)
+    plus_in = inv_stdv * (centered_x + 1.0 / 255.0)
+    cdf_plus = approx_standard_normal_cdf(plus_in)
+
+    min_in = inv_stdv * (centered_x - 1.0 / 255.0)
+    cdf_min = approx_standard_normal_cdf(min_in)
+
+    log_cdf_plus = torch.log(cdf_plus.clamp(min=1e-12))
+    log_one_minus_cdf_min = torch.log((1.0 - cdf_min).clamp(min=1e-12))
+
+    cdf_delta = cdf_plus - cdf_min
+    log_probs = torch.where(
+            x < -0.999,
+            log_cdf_plus,
+            torch.where(x > 0.999, log_one_minus_cdf_min, torch.log(cdf_delta.clamp(min=1e-12))),
+            )
+    assert log_probs.shape == x.shape
+    return log_probs
+
+
+def generate_simplex_noise(instance, x, t, random_param=False):
+    instance.newSeed()
+    if random_param:
+        param = random.choice(
+                [(2, 0.6, 16), (6, 0.6, 32), (7, 0.7, 32), (10, 0.8, 64), (5, 0.8, 16), (4, 0.6, 16), (1, 0.6, 64),
+                 (7, 0.8, 128), (6, 0.9, 64)]
+                )
+        return torch.unsqueeze(
+                torch.from_numpy(
+                        instance.rand_3d_fixed_T_octaves(
+                                x.shape[-2:], t.detach().cpu().numpy(), param[0], param[1],
+                                param[2]
+                                )
+                        ).to(x.device), 0
+                ).repeat(x.shape[0], 1, 1, 1)
+    return torch.unsqueeze(
+            torch.from_numpy(
+                    instance.rand_3d_fixed_T_octaves(x.shape[-2:], t.detach().cpu().numpy(), 6, 0.6)
+                    ).to(x.device), 0
+            ).repeat(x.shape[0], 1, 1, 1)
+
+
 class GaussianDiffusion:
     def __init__(
             self,
             img_size,
             betas,
             img_channels=1,
-            loss_type="l2",
+            loss_type="l2",  # l2,l1 hybrid
             loss_weight='none',  # prop t / uniform / None
-            noise="gauss"  # gauss / perlin / simplex
+            noise="gauss",  # gauss / perlin / simplex
             ):
         super().__init__()
         if noise == "gauss":
@@ -474,16 +550,15 @@ class GaussianDiffusion:
         elif noise == "perlin":
             self.noise_fn = lambda x, t: torch.unsqueeze(
                     torch.from_numpy(
-                            generate_fractal_noise_2d(img_size, (4, 4), 6, 0.6),
+                            generate_fractal_noise_2d(img_size, (4, 4), 7, 0.8),
                             ).to(x.device), 0
                     ).repeat(x.shape[0], 1, 1, 1)
         else:
             self.simplex = Simplex_CLASS()
-            self.noise_fn = lambda x, t: torch.unsqueeze(
-                    torch.from_numpy(
-                            self.simplex.rand_3d_fixed_T_octaves(img_size, t.detach().cpu().numpy(), 6, 0.6)
-                            ).to(x.device), 0
-                    ).repeat(x.shape[0], 1, 1, 1)
+            if noise == "simplex":
+                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, True)
+            else:
+                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False)
 
         self.img_size = img_size
         self.img_channels = img_channels
@@ -562,6 +637,14 @@ class GaussianDiffusion:
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
     def p_mean_variance(self, model, x_t, t):
+        """
+        Finds the mean & variance from N(x_{t-1}; mu_theta(x_t,t), sigma_theta (x_t,t))
+
+        :param model:
+        :param x_t:
+        :param t:
+        :return:
+        """
         model_output = model(x_t, t)
 
         model_var = np.append(self.posterior_variance[1], self.betas[1:])
@@ -655,19 +738,40 @@ class GaussianDiffusion:
         return (extract(self.sqrt_alphas, t, x_t.shape, x_t.device) * x_t +
                 extract(self.sqrt_betas, t, x_t.shape, x_t.device) * noise)
 
+    def calc_vlb(self, model, x_0, x_t, t):
+        # find KL divergence at t
+        true_mean, _, true_log_var = self.q_posterior_mean_variance(x_0, x_t, t)
+        output = self.p_mean_variance(model, x_t, t)
+        kl = normal_kl(true_mean, true_log_var, output["mean"], output["log_variance"])
+        kl = mean_flat(kl) / np.log(2.0)
 
-    def calc_loss(self, model, x, t):
+        decoder_nll = -discretised_gaussian_log_likelihood(
+                x_0, output["mean"], log_scales=0.5 * output["log_variance"]
+                )
+        decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
+
+        output = torch.where((t == 0), decoder_nll, kl)
+        return output
+
+
+    def calc_loss(self, model, x_0, t):
         # noise = torch.randn_like(x)
 
-        noise = self.noise_fn(x, t).float()
-        noisy_x = self.sample_q(x, t, noise)
-        estimate_noise = model(noisy_x, t)
+        noise = self.noise_fn(x_0, t).float()
+        x_t = self.sample_q(x_0, t, noise)
+        estimate_noise = model(x_t, t)
 
         if self.loss_type == "l1":
             loss = mean_flat((estimate_noise - noise).abs())
         elif self.loss_type == "l2":
             loss = mean_flat((estimate_noise - noise).square())
-        return loss, noisy_x, estimate_noise
+        elif self.loss_type == "hybrid":
+            # add vlb term
+            vlb = self.calc_vlb(model, x_0, x_t, t)
+            loss = vlb + mean_flat((estimate_noise - noise).square())
+        else:
+            loss = mean_flat((estimate_noise - noise).square())
+        return loss, x_t, estimate_noise
 
 
     def p_loss(self, model, x, args):
