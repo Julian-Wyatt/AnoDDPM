@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 import dataset
-from diffusion import init_dataset_loader, output_img
+from diffusion_training import init_dataset_loader, output_img
 from models import GaussianDiffusion, get_beta_schedule, UNet
 
 np.set_printoptions(
