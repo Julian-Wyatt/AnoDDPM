@@ -1,32 +1,27 @@
+import json
 import os
 import random
 import sys
 
-import matplotlib.animation as animation
 # import matplotlib
 # matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import numpy as np
 import torch
+from matplotlib import animation
 
 import dataset
-from diffusion_training import init_dataset_loader, output_img
-from models import GaussianDiffusion, get_beta_schedule, UNet
-
-np.set_printoptions(
-        edgeitems=30, linewidth=100000,
-        formatter=dict(float=lambda x: "%.3g" % x)
-        )
+from diffusion_training import defaultdict_from_json, init_dataset_loader, output_img
+# from models import GaussianDiffusion, get_beta_schedule, UNet
+from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule, mean_flat
+from UNet import UNetModel
 
 
-def detect(image, diffusion):
-    pass
 
+def heatmap(real: torch.Tensor, recon: torch.Tensor, filename):
+    mse = mean_flat((recon - real).square())
+    mse = mse.cpu().numpy()
+    plt.imsave(filename, mse, cmap="YlOrRd")
 
-def heatmap(real: torch.Tensor, recon: torch.Tensor):
-    diff = real - recon
-
-    pass
 
 
 if __name__ == "__main__":
@@ -50,32 +45,21 @@ if __name__ == "__main__":
         if "args" in output:
             args = output["args"]
         else:
-            args = {
-                "img_size":        [256, 256],
-                "Batch_Size":      1,
-                "EPOCHS":          10000,
-                "T":               1000,
-                "base_channels":   128,
-                "beta_schedule":   "linear",
-                "channel_mults":   "",
-                "loss-type":       "l2",
-                "loss_weight":     "none",
-                "lr":              0.0001,
-                "random_slice":    False,
-                "sample_distance": 40,
-                "weight_decay":    0.0,
-                "save_imgs":       False,
-                "save_vids":       True,
-                "train_start":     True,
-                "arg_num":         4
-                }
+            try:
+                with open(f'./test_args/args{param[17:]}.json', 'r') as f:
+                    args = json.load(f)
+                args['arg_num'] = param[17:]
+                args = defaultdict_from_json(args)
+            except FileNotFoundError:
+                print(f"args{param[17:]} doesn't exist for {param}")
+                raise
 
         print(f"args{args['arg_num']}")
-        unet = UNet(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
+        unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
 
         betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
-        diff = GaussianDiffusion(
+        diff = GaussianDiffusionModel(
                 args['img_size'], betas, loss_weight=args['loss_weight'],
                 loss_type=args['loss-type']
                 )
