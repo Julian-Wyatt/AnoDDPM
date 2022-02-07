@@ -16,8 +16,11 @@ class Simplex_CLASS:
     def __init__(self):
         self.newSeed()
 
-    def newSeed(self, seed=np.random.randint(-10000000000, 10000000000)):
+    def newSeed(self, seed=None):
+        if not seed:
+            seed = np.random.randint(-10000000000, 10000000000)
         self._perm, self._perm_grad_index3 = _init(seed)
+
 
     def noise2(self, x, y):
         return _noise2(x, y, self._perm)
@@ -46,6 +49,25 @@ class Simplex_CLASS:
         amplitude = 1
         for _ in range(octaves):
             noise += amplitude * self.noise3array(x / frequency, y / frequency, z / frequency)
+            frequency /= 2
+            amplitude *= persistence
+        return noise
+
+    def rand_2d_octaves(self, shape, octaves=1, persistence=0.5, frequency=32):
+        """
+            Returns a layered fractal noise in 2D
+        :param shape: Shape of 2D tensor output
+        :param octaves: Number of levels of fractal noise
+        :param persistence: float between (0-1) -> Rate at which amplitude of each level decreases
+        :param frequency: Frequency of initial octave of noise
+        :return: Fractal noise sample with n lots of 2D images
+        """
+        assert len(shape) == 2
+        noise = np.zeros(shape)
+        y, x = [np.arange(0, end) for end in shape]
+        amplitude = 1
+        for _ in range(octaves):
+            noise += amplitude * self.noise2array(x / frequency, y / frequency)
             frequency /= 2
             amplitude *= persistence
         return noise
