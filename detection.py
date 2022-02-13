@@ -12,15 +12,19 @@ from matplotlib import animation
 import dataset
 from diffusion_training import defaultdict_from_json, init_dataset_loader, output_img
 # from models import GaussianDiffusion, get_beta_schedule, UNet
-from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule, mean_flat
+from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from UNet import UNetModel
 
 
-
 def heatmap(real: torch.Tensor, recon: torch.Tensor, filename):
-    mse = mean_flat((recon - real).square())
-    mse = mse.cpu().numpy()
-    plt.imsave(filename, mse, cmap="YlOrRd")
+    mse = (recon - real).square()
+    # mse = mse.cpu().numpy()
+    plt.imshow(output_img(mse, -1)[..., 0], cmap="YlOrRd")
+    plt.colorbar()
+    plt.savefig(filename)
+    plt.clf()
+    # plt.imsave(filename, mse, cmap="YlOrRd")
+
 
 
 
@@ -33,15 +37,20 @@ if __name__ == "__main__":
     if ".DS_Store" in params:
         params.remove(".DS_Store")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset_path = './CancerousDataset/EdinburghDataset/Anomalous/raw'
-
+    dataset_path = './CancerousDataset/EdinburghDataset/Anomalous-T1/raw'
+    print(params)
     for param in params:
-        try:
+        if param.isnumeric():
+            output = torch.load(f'./model/diff-params-ARGS={param}/params-final.pt', map_location=device)
+        elif param[:4] == "args" and param[-5:] == ".json":
+            output = torch.load(f'./model/diff-params-ARGS={param[4:-5]}/params-final.pt', map_location=device)
+        elif param[:4] == "args":
+            output = torch.load(f'./model/diff-params-ARGS={param[4:]}/params-final.pt', map_location=device)
+        else:
             # if checkpointed version
             # output = torch.load(f'./model/{param}/checkpoint/diff_epoch=0.pt', map_location=device)
             output = torch.load(f'./model/{param}/params-final.pt', map_location=device)
-        except FileNotFoundError:
-            continue
+
         if "args" in output:
             args = output["args"]
         else:
@@ -61,7 +70,7 @@ if __name__ == "__main__":
 
         diff = GaussianDiffusionModel(
                 args['img_size'], betas, loss_weight=args['loss_weight'],
-                loss_type=args['loss-type']
+                loss_type=args['loss-type'], noise=args["noise_fn"]
                 )
 
         unet.load_state_dict(output["ema"])
@@ -69,7 +78,7 @@ if __name__ == "__main__":
 
         AnoDataset = dataset.AnomalousMRIDataset(
                 ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
-                slice_selection="random"
+                slice_selection="random", resized=True
                 )
         loader = init_dataset_loader(AnoDataset, args)
 
@@ -78,11 +87,12 @@ if __name__ == "__main__":
         except OSError:
             pass
 
-        for epoch in range(1):
+        for epoch in range(5):
             for i in range(len(AnoDataset)):
                 new = next(loader)
-                img = new["image"][0].to(device)
-                timestep = random.randint(30, args["sample_distance"] * 2)
+                img = new["image"].to(device)
+                timestep = random.randint(60, args["sample_distance"])
+
                 output = diff.forward_backward(unet, img, see_whole_sequence="whole", t_distance=timestep)
                 fig, ax = plt.subplots()
 
@@ -106,7 +116,9 @@ if __name__ == "__main__":
                 if "slices" in new:
                     output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
                                   f'{new["filenames"][0][-9:-4]}/slices={new["slices"].tolist()}-t={timestep}-attemp' \
-                                  f't={len(temp) + 1}.mp4'
-                ani.save(output_name)
+                                  f't={len(temp) + 1}'
+                ani.save(output_name + ".mp4")
+
+                heatmap(img, output[-1].to(device), output_name + ".png")
 
                 plt.close('all')
