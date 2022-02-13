@@ -1,6 +1,8 @@
 # https://github.com/openai/guided-diffusion/tree/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924
+import os
 import random
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from perlin_numpy import generate_fractal_noise_2d
@@ -92,16 +94,18 @@ def discretised_gaussian_log_likelihood(x, means, log_scales):
     return log_probs
 
 
-def generate_simplex_noise(instance, x, t, random_param=False):
-    instance.newSeed()
+def generate_simplex_noise(Simplex_instance, x, t, random_param=False, octave=6, persistence=0.8, frequency=64):
+    Simplex_instance.newSeed()
     if random_param:
         param = random.choice(
                 [(2, 0.6, 16), (6, 0.6, 32), (7, 0.7, 32), (10, 0.8, 64), (5, 0.8, 16), (4, 0.6, 16), (1, 0.6, 64),
-                 (7, 0.8, 128), (6, 0.9, 64)]
+                 (7, 0.8, 128), (6, 0.9, 64), (2, 0.85, 128), (2, 0.85, 64), (2, 0.85, 32), (2, 0.85, 16), (2, 0.85, 8),
+                 (2, 0.85, 4), (2, 0.85, 2), (1, 0.85, 128), (1, 0.85, 64), (1, 0.85, 32), (1, 0.85, 16), (1, 0.85, 8),
+                 (1, 0.85, 4), (1, 0.85, 2), ]
                 )
         return torch.unsqueeze(
                 torch.from_numpy(
-                        instance.rand_3d_fixed_T_octaves(
+                        Simplex_instance.rand_3d_fixed_T_octaves(
                                 x.shape[-2:], t.detach().cpu().numpy(), param[0], param[1],
                                 param[2]
                                 )
@@ -109,7 +113,10 @@ def generate_simplex_noise(instance, x, t, random_param=False):
                 ).repeat(x.shape[0], 1, 1, 1)
     return torch.unsqueeze(
             torch.from_numpy(
-                    instance.rand_3d_fixed_T_octaves(x.shape[-2:], t.detach().cpu().numpy(), 6, 0.6)
+                    Simplex_instance.rand_3d_fixed_T_octaves(
+                            x.shape[-2:], t.detach().cpu().numpy(), octave,
+                            persistence, frequency
+                            )
                     ).to(x.device), 0
             ).repeat(x.shape[0], 1, 1, 1)
 
@@ -135,7 +142,7 @@ class GaussianDiffusionModel:
                     ).repeat(x.shape[0], 1, 1, 1)
         else:
             self.simplex = Simplex_CLASS()
-            if noise == "simplex":
+            if noise == "simplex_randParam":
                 self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, True)
             else:
                 self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False)
@@ -227,6 +234,7 @@ class GaussianDiffusionModel:
         """
         model_output = model(x_t, t)
 
+        # fixed model variance defined as \hat{\beta}_t - could add learned parameter
         model_var = np.append(self.posterior_variance[1], self.betas[1:])
         model_logvar = np.log(model_var)
         model_var = extract(model_var, t, x_t.shape, x_t.device)
@@ -304,9 +312,6 @@ class GaussianDiffusionModel:
         return (extract(self.sqrt_alphas_cumprod, t, x_0.shape, x_0.device) * x_0 +
                 extract(self.sqrt_one_minus_alphas_cumprod, t, x_0.shape, x_0.device) * noise)
 
-    # TODO: curious whether noise needs to be the same across every t here
-
-
     def sample_q_gradual(self, x_t, t, noise):
         """
         q (x_t | x_{t-1})
@@ -354,19 +359,129 @@ class GaussianDiffusionModel:
         return loss, x_t, estimate_noise
 
 
-    def p_loss(self, model, x, args):
+    def p_loss(self, model, x_0, args):
         if self.loss_weight == "none":
             if args["train_start"]:
                 t = torch.randint(
-                        0, min(args["sample_distance"], self.num_timesteps), (x.shape[0],),
-                        device=x.device
+                        0, min(args["sample_distance"], self.num_timesteps), (x_0.shape[0],),
+                        device=x_0.device
                         )
             else:
-                t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=x.device)
+                t = torch.randint(0, self.num_timesteps, (x_0.shape[0],), device=x_0.device)
             weights = 1
         else:
-            t, weights = self.sample_t_with_weights(x.shape[0], x.device)
+            t, weights = self.sample_t_with_weights(x_0.shape[0], x_0.device)
 
-        loss = self.calc_loss(model, x, t)
+        loss = self.calc_loss(model, x_0, t)
         loss = ((loss[0] * weights).mean(), loss[1], loss[2])
         return loss
+
+
+    def detection_A(self, model, x_0, args, file):
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}/A"]:
+            try:
+                os.makedirs(i)
+            except OSError:
+                pass
+
+        for i in range(7, 0, -1):
+            freq = 2 ** i
+            self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
+
+            for t_distance in range(50, args["sample_distance"], 50):
+                output = torch.empty((10, 1, *args["img_size"]))
+                for avg in range(10):
+
+                    t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
+                    x = self.sample_q(
+                            x_0, t_tensor,
+                            self.noise_fn(x_0, t_tensor).float()
+                            )
+
+                    for t in range(int(t_distance) - 1, -1, -1):
+                        t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                        with torch.no_grad():
+                            out = self.sample_p(model, x, t_batch)
+                            x = out["sample"]
+
+                    output[avg, ...] = x
+
+                # save image containing initial, each final denoised image, mean & mse
+                output_mean = torch.mean(output, dim=0)
+                output_img = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+
+                temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/A')
+
+                plt.imshow(output_img(output_img, 4), cmap='gray')
+
+                plt.savefig(f'./diffusion-videos/Anomalous/{file}/A/freq={i}-t={t_distance}-{len(temp) + 1}.png')
+                plt.clf()
+
+    def detection_B(self, model, x_0, args, file, type="octave"):
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}/{type}"]:
+            try:
+                os.makedirs(i)
+            except OSError:
+                pass
+        if type == "octave":
+            self.noise_fn = lambda x, t: generate_simplex_noise(
+                    self.simplex, x, t, False, frequency=64, octave=6,
+                    persistence=0.8
+                    )
+        else:
+            self.noise_fn = lambda x, t: torch.randn_like(x)
+
+        for t_distance in range(50, args["sample_distance"], 50):
+            output = torch.empty((10, 1, *args["img_size"]))
+            for avg in range(10):
+
+                t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
+                x = self.sample_q(
+                        x_0, t_tensor,
+                        self.noise_fn(x_0, t_tensor).float()
+                        )
+
+                for t in range(int(t_distance) - 1, -1, -1):
+                    t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                    with torch.no_grad():
+                        out = self.sample_p(model, x, t_batch)
+                        x = out["sample"]
+
+                output[avg, ...] = x
+
+            # save image containing initial, each final denoised image, mean & mse
+            output_mean = torch.mean(output, dim=0)
+            output_img = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+
+            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/{type}')
+
+            plt.imshow(output_img(output_img, 4), cmap='gray')
+
+            plt.savefig(f'./diffusion-videos/Anomalous/{file}/{type}/freq={i}-t={t_distance}-{len(temp) + 1}.png')
+            plt.clf()
+
+
+
+
+x = """
+Two methods of detection:
+
+A - using varying simplex frequencies
+B - using octave based simplex noise
+C - gaussian based (same as B but gaussian)
+
+
+A: for i in range(6,0,-1):
+    2**i == frequency
+   Frequency = 64: Sample 10 times at t=50, denoise and average
+   Repeat at t = range (50, ARGS["sample distance"], 50)
+   
+   Note simplex noise is fixed frequency ie no octave mixure
+   
+B: Using some initial "good" simplex octave parameters such as 64 freq, oct = 6, persistence= 0.9   
+   Sample 10 times at t=50, denoise and average
+   Repeat at t = range (50, ARGS["sample distance"], 50)
+   
+"""
