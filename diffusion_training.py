@@ -13,7 +13,7 @@ import torchvision.utils
 from matplotlib import animation
 from torch import optim
 
-import dataset
+from dataset import cycle, MRIDataset
 from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from UNet import UNetModel, update_ema_params
 
@@ -173,10 +173,10 @@ def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
 
 
 def init_datasets(args):
-    training_dataset = dataset.MRIDataset(
+    training_dataset = MRIDataset(
             ROOT_DIR=f'{ROOT_DIR}Train/', img_size=args['img_size'], random_slice=args['random_slice']
             )
-    testing_dataset = dataset.MRIDataset(
+    testing_dataset = MRIDataset(
             ROOT_DIR=f'{ROOT_DIR}Test/', img_size=args['img_size'], random_slice=args['random_slice']
             )
     # testing_dataset = MRIDataset(ROOT_DIR='/content/drive/MyDrive/dissertation data/Anomalous/',transform=transform)
@@ -184,7 +184,7 @@ def init_datasets(args):
 
 
 def init_dataset_loader(mri_dataset, args):
-    dataset_loader = dataset.cycle(
+    dataset_loader = cycle(
             torch.utils.data.DataLoader(
                     mri_dataset,
                     batch_size=args['Batch_Size'], shuffle=True,
@@ -200,7 +200,7 @@ def init_dataset_loader(mri_dataset, args):
         print(new["image"].shape)
         plt.rcParams['figure.dpi'] = 100
         plt.grid(False)
-        # plt.imshow(output_img(new["image"]),cmap='gray')
+        # plt.imshow(output_img(new["image"]), cmap='gray')
         # plt.show()
         # plt.pause(0.0001)
     return dataset_loader
