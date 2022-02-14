@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from perlin_numpy import generate_fractal_noise_2d
 
+from diffusion_training import output_img
 from simplex import Simplex_CLASS
 
 
@@ -409,12 +410,12 @@ class GaussianDiffusionModel:
 
                 # save image containing initial, each final denoised image, mean & mse
                 output_mean = torch.mean(output, dim=0)
-                output_img = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+                out = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
 
                 temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/A')
 
-                plt.imshow(output_img(output_img, 4), cmap='gray')
-
+                plt.imshow(output_img(out, 4), cmap='gray')
+                plt.axis('off')
                 plt.savefig(f'./diffusion-videos/Anomalous/{file}/A/freq={i}-t={t_distance}-{len(temp) + 1}.png')
                 plt.clf()
 
@@ -453,12 +454,12 @@ class GaussianDiffusionModel:
 
             # save image containing initial, each final denoised image, mean & mse
             output_mean = torch.mean(output, dim=0)
-            output_img = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+            out = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
 
             temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/{type}')
 
-            plt.imshow(output_img(output_img, 4), cmap='gray')
-
+            plt.imshow(output_img(out, 4), cmap='gray')
+            plt.axis('off')
             plt.savefig(f'./diffusion-videos/Anomalous/{file}/{type}/freq={i}-t={t_distance}-{len(temp) + 1}.png')
             plt.clf()
 
