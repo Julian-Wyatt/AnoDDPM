@@ -435,7 +435,7 @@ class AnomalousMRIDataset(Dataset):
             }
 
         self.filenames = self.slices.keys()
-        self.filenames = list(map(lambda name: f"{ROOT_DIR}/{name}.nii", self.filenames))
+        self.filenames = list(map(lambda name: f"{ROOT_DIR}/{name}.npy", self.filenames))
         # self.filenames = os.listdir(ROOT_DIR)
         if ".DS_Store" in self.filenames:
             self.filenames.remove(".DS_Store")
@@ -481,14 +481,16 @@ class AnomalousMRIDataset(Dataset):
             sample["slices"] = slice_idx
         elif self.slice_selection == "iterateKnown":
             temp_range = self.slices[self.filenames[idx][-9:-4]]
-            output = []
+            output = torch.empty(temp_range.stop - temp_range.start, *self.img_size)
+            # print(output.shape, image.shape, temp_range)
             for i in temp_range:
-                temp = image[:, : i:i + 1].reshape(image.shape[0], image.shape[1]).astype(np.float32)
+                temp = image[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
                 if self.transform:
                     temp = self.transform(temp)
                     # temp = transforms.functional.rotate(temp, -90)
-                output.append(temp)
+                output[i - temp_range.start, ...] = temp
             image = output
+            sample["slices"] = temp_range
 
         elif self.slice_selection == "iterateUnknown":
 
@@ -501,6 +503,7 @@ class AnomalousMRIDataset(Dataset):
                 output[i, ...] = temp
 
             image = output
+            sample["slices"] = image.shape[0]
 
         sample["image"] = image
         sample["filenames"] = self.filenames[idx]
