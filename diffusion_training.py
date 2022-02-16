@@ -1,35 +1,24 @@
+import collections
 import copy
 import json
 import os
 import sys
 import time
-from collections import defaultdict
 from random import seed
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
-import torchvision.utils
 from matplotlib import animation
 from torch import optim
 
-from dataset import cycle, MRIDataset
+import dataset
 from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
+from helpers import *
 from UNet import UNetModel, update_ema_params
 
 torch.cuda.empty_cache()
 
-# from google.colab import drive
-# drive.mount('/content/drive')
-# ROOT_DIR = "/content/drive/MyDrive/dissertation data/"
 ROOT_DIR = "./"
-
-
-def output_img(img, row_size=-1):
-    scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    return torchvision.utils.make_grid(scale_img(img), nrow=row_size).cpu().data.permute(0, 2, 1).contiguous().permute(
-            2, 1, 0
-            )
 
 
 def train(training_dataset_loader, testing_dataset_loader, args, resume):
@@ -73,6 +62,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     del resume
     startTime = time.time()
     losses = []
+    vlb = collections.deque([], maxlen=200)
     # tqdm_epoch = tqdm.trange(args['EPOCHS'])
     # dataset loop
     for epoch in tqdm_epoch:
@@ -81,13 +71,17 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             data = next(training_dataset_loader)
             x = data["image"]
             x = x.to(device)
-            loss, noisy, est = diffusion.p_loss(model, x, args)
+            loss, estimates = diffusion.p_loss(model, x, args)
+            loss_terms, noisy, est = estimates
             optimiser.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimiser.step()
 
             update_ema_params(ema, model)
+
+            if "vlb" in loss_terms:
+                vlb.append(loss_terms["vlb"])
 
             mean_loss.append(loss.data.cpu())
             # print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
@@ -112,7 +106,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             print(
                     f"epoch: {epoch}, imgs trained: {(i + 1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
                     f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
-                    f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f},"
+                    f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f}, VLB: {np.mean(vlb)}"
                     f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(timeTaken / 3600)}:"
                     f"{((timeTaken / 3600) % 1) * 60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r"
                     )
@@ -129,6 +123,7 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
     plt.rcParams['figure.dpi'] = 200
     # for i in [args['sample_distance'], args['T'] / 4, None]:
     # for i in [*range(1,args['sample_distance']),args['T']]:
+    vlb = []
     for i in [*range(1, args['sample_distance'], 10)]:
         data = next(testing_dataset_loader)
         x = data["image"]
@@ -137,14 +132,20 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
 
         fig, ax = plt.subplots()
         out = diffusion.forward_backward(ema, x, see_whole_sequence="half", t_distance=i)
-        imgs = [[ax.imshow(output_img(x, row_size), animated=True)] for x in out]
+        imgs = [[ax.imshow(gridify_output(x, row_size), animated=True)] for x in out]
         ani = animation.ArtistAnimation(
                 fig, imgs, interval=200, blit=True,
                 repeat_delay=1000
                 )
 
         ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set-t={i}.mp4')
-        print(f"saved {i}")
+
+        t_tensor = torch.tensor([i], device=x.device).repeat(x.shape[0])
+        eps = diffusion.noise_fn(x, t_tensor)
+        x_t = diffusion.sample_q(x, t_tensor, eps)
+        vlb.append(diffusion.calc_vlb(ema, x, x_t, t_tensor))
+        print(f"saved {i}, VLB: {vlb[-1].detach().cpu().numpy()}")
+    print(f"Test set VLB: {np.mean(vlb)}")
 
 
 def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
@@ -171,39 +172,6 @@ def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
                     }, f'{ROOT_DIR}model/diff-params-ARGS={args["arg_num"]}/checkpoint/diff_epoch={epoch}.pt'
                 )
 
-
-def init_datasets(args):
-    training_dataset = MRIDataset(
-            ROOT_DIR=f'{ROOT_DIR}Train/', img_size=args['img_size'], random_slice=args['random_slice']
-            )
-    testing_dataset = MRIDataset(
-            ROOT_DIR=f'{ROOT_DIR}Test/', img_size=args['img_size'], random_slice=args['random_slice']
-            )
-    # testing_dataset = MRIDataset(ROOT_DIR='/content/drive/MyDrive/dissertation data/Anomalous/',transform=transform)
-    return training_dataset, testing_dataset
-
-
-def init_dataset_loader(mri_dataset, args):
-    dataset_loader = cycle(
-            torch.utils.data.DataLoader(
-                    mri_dataset,
-                    batch_size=args['Batch_Size'], shuffle=True,
-                    num_workers=0, drop_last=True
-                    )
-            )
-
-    new = next(dataset_loader)
-
-    # convert to rgb:
-    # new["image"] = torch.cat((new["image"][:],new["image"][:],new["image"][:]),dim=1)
-    if type(new["image"]) != list:
-        print(new["image"].shape)
-        plt.rcParams['figure.dpi'] = 100
-        plt.grid(False)
-        # plt.imshow(output_img(new["image"]), cmap='gray')
-        # plt.show()
-        # plt.pause(0.0001)
-    return dataset_loader
 
 
 def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=False, save_vids=False):
@@ -233,7 +201,7 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=F
             plt.title(f'real,noisy,noise prediction,mse-{epoch}epoch')
         plt.rcParams['figure.dpi'] = 150
         plt.grid(False)
-        plt.imshow(output_img(out, row_size), cmap='gray')
+        plt.imshow(gridify_output(out, row_size), cmap='gray')
 
         plt.savefig(f'./diffusion-training-images/ARGS={args["arg_num"]}/EPOCH={epoch}.png')
         plt.clf()
@@ -245,7 +213,7 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=F
                 out = diffusion.forward_backward(ema, x, "whole", args['sample_distance'])
             else:
                 out = diffusion.forward_backward(ema, x, "half", args['sample_distance'])
-            imgs = [[ax.imshow(output_img(x, row_size), animated=True)] for x in out]
+            imgs = [[ax.imshow(gridify_output(x, row_size), animated=True)] for x in out]
             ani = animation.ArtistAnimation(
                     fig, imgs, interval=100, blit=True,
                     repeat_delay=1000
@@ -255,12 +223,6 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=F
 
     plt.close('all')
 
-
-def defaultdict_from_json(jsonDict):
-    func = lambda: defaultdict(str)
-    dd = func()
-    dd.update(jsonDict)
-    return dd
 
 
 if __name__ == '__main__':
@@ -305,9 +267,9 @@ if __name__ == '__main__':
             except OSError:
                 pass
         print(file, args)
-        training_dataset, testing_dataset = init_datasets(args)
-        training_dataset_loader = init_dataset_loader(training_dataset, args)
-        testing_dataset_loader = init_dataset_loader(testing_dataset, args)
+        training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)
+        training_dataset_loader = dataset.init_dataset_loader(training_dataset, args)
+        testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
 
         loaded_model = {}
         if resume:
