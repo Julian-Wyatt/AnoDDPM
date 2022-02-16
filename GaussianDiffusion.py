@@ -4,10 +4,9 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
-import torch
 from perlin_numpy import generate_fractal_noise_2d
 
-from diffusion_training import output_img
+from helpers import *
 from simplex import Simplex_CLASS
 
 
@@ -346,17 +345,17 @@ class GaussianDiffusionModel:
         noise = self.noise_fn(x_0, t).float()
         x_t = self.sample_q(x_0, t, noise)
         estimate_noise = model(x_t, t)
-
+        loss = {}
+        loss["vlb"] = self.calc_vlb(model, x_0, x_t, t)
         if self.loss_type == "l1":
-            loss = mean_flat((estimate_noise - noise).abs())
+            loss["loss"] = mean_flat((estimate_noise - noise).abs())
         elif self.loss_type == "l2":
-            loss = mean_flat((estimate_noise - noise).square())
+            loss["loss"] = mean_flat((estimate_noise - noise).square())
         elif self.loss_type == "hybrid":
             # add vlb term
-            vlb = self.calc_vlb(model, x_0, x_t, t)
-            loss = vlb + mean_flat((estimate_noise - noise).square())
+            loss["loss"] = loss["vlb"] + mean_flat((estimate_noise - noise).square())
         else:
-            loss = mean_flat((estimate_noise - noise).square())
+            loss["loss"] = mean_flat((estimate_noise - noise).square())
         return loss, x_t, estimate_noise
 
 
@@ -373,14 +372,15 @@ class GaussianDiffusionModel:
         else:
             t, weights = self.sample_t_with_weights(x_0.shape[0], x_0.device)
 
-        loss = self.calc_loss(model, x_0, t)
-        loss = ((loss[0] * weights).mean(), loss[1], loss[2])
+        loss, x_t, eps_t = self.calc_loss(model, x_0, t)
+        loss = ((loss["loss"] * weights).mean(), loss)
         return loss
 
 
-    def detection_A(self, model, x_0, args, file):
-        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}",
-                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}/A"]:
+    def detection_A(self, model, x_0, args, file, mask):
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/A"]:
             try:
                 os.makedirs(i)
             except OSError:
@@ -391,7 +391,7 @@ class GaussianDiffusionModel:
             self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
 
             for t_distance in range(50, args["sample_distance"], 50):
-                output = torch.empty((10, 1, *args["img_size"]))
+                output = torch.empty((10, 1, *args["img_size"]), device=x_0.device)
                 for avg in range(10):
 
                     t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
@@ -409,24 +409,32 @@ class GaussianDiffusionModel:
                     output[avg, ...] = x
 
                 # save image containing initial, each final denoised image, mean & mse
-                output_mean = torch.mean(output, dim=0)
-                out = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+                output_mean = torch.mean(output, dim=0).reshape(1, 1, *args["img_size"])
+                mse = ((output_mean - x_0).square() * 2) - 1
+                mse_threshold = mse > 0
+                mse_threshold = (mse_threshold.float() * 2) - 1
+                out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
 
-                temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/A')
+                temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A')
 
-                plt.imshow(output_img(out, 4), cmap='gray')
+                plt.imshow(gridify_output(out, 4), cmap='gray')
                 plt.axis('off')
-                plt.savefig(f'./diffusion-videos/Anomalous/{file}/A/freq={i}-t={t_distance}-{len(temp) + 1}.png')
+                plt.savefig(
+                        f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/A/freq={i}-t'
+                        f'={t_distance}-{len(temp) + 1}.png'
+                        )
                 plt.clf()
 
-    def detection_B(self, model, x_0, args, file, type="octave"):
-        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}",
-                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file}/{type}"]:
+    def detection_B(self, model, x_0, args, file, mask, func_type="octave"):
+        assert type(file) == tuple
+        for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}",
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/{func_type}"]:
             try:
                 os.makedirs(i)
             except OSError:
                 pass
-        if type == "octave":
+        if func_type == "octave":
             self.noise_fn = lambda x, t: generate_simplex_noise(
                     self.simplex, x, t, False, frequency=64, octave=6,
                     persistence=0.8
@@ -435,7 +443,7 @@ class GaussianDiffusionModel:
             self.noise_fn = lambda x, t: torch.randn_like(x)
 
         for t_distance in range(50, args["sample_distance"], 50):
-            output = torch.empty((10, 1, *args["img_size"]))
+            output = torch.empty((10, 1, *args["img_size"]), device=x_0.device)
             for avg in range(10):
 
                 t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
@@ -453,14 +461,20 @@ class GaussianDiffusionModel:
                 output[avg, ...] = x
 
             # save image containing initial, each final denoised image, mean & mse
-            output_mean = torch.mean(output, dim=0)
-            out = torch.cat([x_0, output[:5], output_mean, (x_0 - output_mean).square()])
+            output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *args["img_size"])
+            mse = ((output_mean - x_0).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+            out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
 
-            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file}/{type}')
+            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}')
 
-            plt.imshow(output_img(out, 4), cmap='gray')
+            plt.imshow(gridify_output(out, 4), cmap='gray')
             plt.axis('off')
-            plt.savefig(f'./diffusion-videos/Anomalous/{file}/{type}/freq={i}-t={t_distance}-{len(temp) + 1}.png')
+            plt.savefig(
+                    f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}/t'
+                    f'={t_distance}-{len(temp) + 1}.png'
+                    )
             plt.clf()
 
 
