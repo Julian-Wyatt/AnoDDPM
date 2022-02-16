@@ -10,11 +10,13 @@ from matplotlib import animation
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+# helper function to make getting another batch of data easier
+import helpers
+
 
 # from diffusion_training import output_img
 
 
-# helper function to make getting another batch of data easier
 def cycle(iterable):
     while True:
         for x in iterable:
@@ -167,14 +169,14 @@ def checkDataSet():
     image = new["image"]
 
     print(image.shape)
-    from diffusion_training import output_img
+    from helpers import gridify_output
     print("Making Video for resized =", resized)
     fig = plt.figure()
     ims = []
     for i in range(0, image.shape[1], 2):
         tempImg = image[:, i, ...].reshape(image.shape[0], 1, image.shape[2], image.shape[3])
         im = plt.imshow(
-                output_img(tempImg, 5), cmap='gray',
+                gridify_output(tempImg, 5), cmap='gray',
                 animated=True
                 )
         ims.append([im])
@@ -330,6 +332,48 @@ def get_segmented_labels(save_videos=True):
                         print(f"Saved resized  {DATASET}/Anomalous-T1/raw/{patient}")
 
 
+def load_datasets_for_test():
+    args = {'img_size': (256, 256), 'random_slice': True, 'Batch_Size': 20}
+    training, testing = init_datasets("./", args)
+
+    ano_dataset = AnomalousMRIDataset(
+            ROOT_DIR=f'./CancerousDataset/EdinburghDataset/Anomalous-T1', img_size=args['img_size'],
+            slice_selection="random", resized=False
+            )
+
+    train_loader = init_dataset_loader(training, args)
+    ano_loader = init_dataset_loader(ano_dataset, args)
+
+    for i in range(5):
+        new = next(train_loader)
+        new_ano = next(ano_loader)
+        output = torch.cat((new["image"][:10], new_ano["image"][:10]))
+        plt.imshow(helpers.gridify_output(output, 5), cmap='gray')
+        plt.show()
+        plt.pause(0.0001)
+
+
+def init_datasets(ROOT_DIR, args):
+    training_dataset = MRIDataset(
+            ROOT_DIR=f'{ROOT_DIR}Train/', img_size=args['img_size'], random_slice=args['random_slice']
+            )
+    testing_dataset = MRIDataset(
+            ROOT_DIR=f'{ROOT_DIR}Test/', img_size=args['img_size'], random_slice=args['random_slice']
+            )
+    # testing_dataset = MRIDataset(ROOT_DIR='/content/drive/MyDrive/dissertation data/Anomalous/',transform=transform)
+    return training_dataset, testing_dataset
+
+
+def init_dataset_loader(mri_dataset, args):
+    dataset_loader = cycle(
+            torch.utils.data.DataLoader(
+                    mri_dataset,
+                    batch_size=args['Batch_Size'], shuffle=True,
+                    num_workers=0, drop_last=True
+                    )
+            )
+
+    return dataset_loader
 
 
 class MRIDataset(Dataset):
@@ -344,7 +388,8 @@ class MRIDataset(Dataset):
         """
         self.transform = transforms.Compose(
                 [transforms.ToPILImage(),
-                 transforms.CenterCrop(240),
+                 transforms.RandomAffine(3, translate=(0.02, 0.09)),
+                 transforms.CenterCrop(235),
                  transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
                  # transforms.CenterCrop(256),
                  transforms.ToTensor(),
@@ -416,7 +461,8 @@ class AnomalousMRIDataset(Dataset):
         """
         self.transform = transforms.Compose(
                 [transforms.ToPILImage(),
-                 transforms.CenterCrop(240),
+                 transforms.CenterCrop((175, 240)),
+                 # transforms.RandomAffine(0, translate=(0.02, 0.1)),
                  transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
                  # transforms.CenterCrop(256),
                  transforms.ToTensor(),
@@ -435,7 +481,7 @@ class AnomalousMRIDataset(Dataset):
             }
 
         self.filenames = self.slices.keys()
-        self.filenames = list(map(lambda name: f"{ROOT_DIR}/{name}.npy", self.filenames))
+        self.filenames = list(map(lambda name: f"{ROOT_DIR}/raw/{name}.npy", self.filenames))
         # self.filenames = os.listdir(ROOT_DIR)
         if ".DS_Store" in self.filenames:
             self.filenames.remove(".DS_Store")
@@ -511,6 +557,21 @@ class AnomalousMRIDataset(Dataset):
         return sample
 
 
+def load_image_mask(file, img_size, Ano_Dataset_Class):
+    transform = Ano_Dataset_Class.transform
+    img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}-resized.npy")
+    output = torch.empty(img_mask.shape[0], *img_size)
+    for i in range(img_mask.shape[0]):
+        temp = img_mask[i:i + 1, :, :].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
+        if transform:
+            temp = transform(temp)
+            # temp = transforms.functional.rotate(temp, -90)
+        output[i, ...] = temp
+
+    return output
+
+
 if __name__ == "__main__":
-    get_segmented_labels(False)
+    load_datasets_for_test()
+    # get_segmented_labels(False)
     # main()

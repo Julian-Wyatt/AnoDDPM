@@ -231,6 +231,7 @@ class UNetModel(nn.Module):
             dropout=0,
             attention_resolutions="32,16,8",
             biggan_updown=True,
+            in_channels=1
             ):
         self.dtype = torch.float32
         super().__init__()
@@ -251,7 +252,7 @@ class UNetModel(nn.Module):
             attention_ds.append(img_size // int(res))
 
         self.image_size = img_size
-        self.in_channels = 1
+        self.in_channels = in_channels
         self.model_channels = base_channels
         self.out_channels = 1
         self.num_res_blocks = num_res_blocks
