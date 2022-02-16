@@ -6,28 +6,29 @@ import sys
 # import matplotlib
 # matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
-import torch
 from matplotlib import animation
 
 import dataset
-from diffusion_training import defaultdict_from_json, init_dataset_loader, output_img
-# from models import GaussianDiffusion, get_beta_schedule, UNet
 from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
+from helpers import *
 from UNet import UNetModel
 
-DATASET_PATH = './CancerousDataset/EdinburghDataset/Anomalous-T1/raw'
+DATASET_PATH = './CancerousDataset/EdinburghDataset/Anomalous-T1'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def heatmap(real: torch.Tensor, recon: torch.Tensor, filename):
-    mse = (recon - real).square()
-    # mse = mse.cpu().numpy()
-    plt.imshow(output_img(mse, -1)[..., 0], cmap="YlOrRd")
-    plt.colorbar()
+def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename):
+    mse = ((recon - real).square() * 2) - 1
+    mse_threshold = mse > 0
+    mse_threshold = (mse_threshold.float() * 2) - 1
+    output = torch.cat((real, recon, mse, mse_threshold, mask))
+    # plt.imshow(gridify_output(mse, 3)[..., 0], cmap="YlOrRd")
+    # plt.colorbar()
+    plt.imshow(gridify_output(output, 5)[..., 0], cmap="gray")
     plt.axis('off')
     plt.savefig(filename)
     plt.clf()
-    # plt.imsave(filename, mse, cmap="YlOrRd")
+
 
 
 def load_parameters():
@@ -87,12 +88,12 @@ def anomalous_validation():
 
     unet.load_state_dict(output["ema"])
     unet.to(device)
-
+    unet.eval()
     AnoDataset = dataset.AnomalousMRIDataset(
             ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
             slice_selection="iterateKnown", resized=True
             )
-    loader = init_dataset_loader(AnoDataset, args)
+    loader = dataset.init_dataset_loader(AnoDataset, args)
     plt.rcParams['figure.dpi'] = 200
 
     try:
@@ -110,8 +111,16 @@ def anomalous_validation():
         new = next(loader)
         img = new["image"].to(device)
         img = img.reshape(img.shape[1], 1, *args["img_size"])
-
+        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], AnoDataset)
+        img_mask = img_mask.to(device)
         for slice in range(0, img.shape[0], 5):
+            try:
+                os.makedirs(
+                        f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
+                        f'{new["slices"][slice].numpy()[0]}'
+                        )
+            except OSError:
+                pass
             timestep = random.randint(args["sample_distance"] // 2, args["sample_distance"])
 
             output = diff.forward_backward(
@@ -122,40 +131,51 @@ def anomalous_validation():
 
             fig, ax = plt.subplots()
             plt.axis('off')
-            imgs = [[ax.imshow(output_img(x, 5), animated=True)] for x in output]
+            imgs = [[ax.imshow(gridify_output(x, 5), animated=True)] for x in output]
             ani = animation.ArtistAnimation(
                     fig, imgs, interval=100, blit=True,
                     repeat_delay=1000
                     )
-            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
+            temp = os.listdir(
+                    f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
+                    f'{new["slices"][slice].numpy()[0]}'
+                    )
 
             output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
-                          f'{new["filenames"][0][-9:-4]}/slices={slice}-t={timestep}-attemp' \
+                          f'{new["filenames"][0][-9:-4]}/{new["slices"][slice].numpy()[0]}/t={timestep}-attemp' \
                           f't={len(temp) + 1}'
             ani.save(output_name + ".mp4")
 
-            heatmap(img, output[-1].to(device), output_name + ".png")
+            heatmap(
+                    img[slice, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
+                    img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]),
+                    output_name + ".png"
+                    )
 
             plt.close('all')
 
             if args["noise_fn"] == "gauss":
                 diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args, new["filenames"][0][
-                                                                                      -9:-4], "gauss"
+                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "gauss"
                         )
             elif args["noise_fn"] == "simplex":
                 diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args, new["filenames"][0][
-                                                                                      -9:-4], "octave"
+                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave"
                         )
             elif args["noise_fn"] == "simplex_randParam":
                 diff.detection_A(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args, new["filenames"][0][
-                                                                                      -9:-4]
+                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"])
                         )
                 diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args, new["filenames"][0][
-                                                                                      -9:-4], "octave"
+                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave"
                         )
 
 
