@@ -559,7 +559,10 @@ class AnomalousMRIDataset(Dataset):
 
 def load_image_mask(file, img_size, Ano_Dataset_Class):
     transform = Ano_Dataset_Class.transform
-    img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}-resized.npy")
+    if Ano_Dataset_Class.resized:
+        img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}-resized.npy")
+    else:
+        img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}.npy")
     output = torch.empty(img_mask.shape[0], *img_size)
     for i in range(img_mask.shape[0]):
         temp = img_mask[i:i + 1, :, :].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
