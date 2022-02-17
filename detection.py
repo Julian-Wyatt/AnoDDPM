@@ -13,7 +13,7 @@ from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from helpers import *
 from UNet import UNetModel
 
-DATASET_PATH = './CancerousDataset/EdinburghDataset/Anomalous-T1'
+DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
