@@ -537,6 +537,21 @@ class AnomalousMRIDataset(Dataset):
             image = output
             sample["slices"] = temp_range
 
+        elif self.slice_selection == "iterateKnown_restricted":
+
+            temp_range = self.slices[self.filenames[idx][-9:-4]]
+            output = torch.empty(4, *self.img_size)
+            slices = [int(k) for k in np.linspace(temp_range.start + 5, temp_range.stop - 5, 4)]
+            counter = 0
+            for i in slices:
+                temp = image[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
+                if self.transform:
+                    temp = self.transform(temp)
+                output[counter, ...] = temp
+                counter += 1
+            image = output
+            sample["slices"] = slices
+
         elif self.slice_selection == "iterateUnknown":
 
             output = torch.empty(image.shape[0], *self.img_size)
@@ -594,15 +609,29 @@ def load_image_mask(file, img_size, Ano_Dataset_Class):
         img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}-resized.npy")
     else:
         img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}.npy")
-    output = torch.empty(img_mask.shape[0], *img_size)
-    for i in range(img_mask.shape[0]):
-        temp = img_mask[i:i + 1, :, :].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
-        if transform:
-            temp = transform(temp)
-            # temp = transforms.functional.rotate(temp, -90)
-        output[i, ...] = temp
+    if Ano_Dataset_Class.slice_selection == "iterateKnown_restricted":
+        temp_range = Ano_Dataset_Class.slices[file]
+        output = torch.empty(4, *img_size)
+        slices = [int(k) for k in np.linspace(temp_range.start + 5, temp_range.stop - 5, 4)]
+        counter = 0
+        for i in slices:
+            temp = img_mask[i, ...].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
+            if transform:
+                temp = transform(temp)
+            output[counter, ...] = temp
+            counter += 1
+        return output
+    else:
+        output = torch.empty(img_mask.shape[0], *img_size)
+        for i in range(img_mask.shape[0]):
+            temp = img_mask[i:i + 1, :, :].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
+            if transform:
+                temp = transform(temp)
+                # temp = transforms.functional.rotate(temp, -90)
+            output[i, ...] = temp
 
-    return output
+        return output
+
 
 
 if __name__ == "__main__":
