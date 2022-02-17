@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 
 import dataset
+import evaluation
 from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from helpers import *
 from UNet import UNetModel
@@ -28,6 +29,9 @@ def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename):
     plt.axis('off')
     plt.savefig(filename)
     plt.clf()
+
+    dice = evaluation.dice_coeff(real, recon, mse=mse, real_mask=mask)
+    return dice
 
 
 
@@ -91,7 +95,7 @@ def anomalous_validation():
     unet.eval()
     AnoDataset = dataset.AnomalousMRIDataset(
             ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
-            slice_selection="iterateKnown", resized=True
+            slice_selection="iterateKnown_restricted", resized=True
             )
     loader = dataset.init_dataset_loader(AnoDataset, args)
     plt.rcParams['figure.dpi'] = 200
@@ -107,13 +111,16 @@ def anomalous_validation():
         except OSError:
             pass
 
+    dice_data = []
     for i in range(len(AnoDataset)):
         new = next(loader)
         img = new["image"].to(device)
         img = img.reshape(img.shape[1], 1, *args["img_size"])
         img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], AnoDataset)
         img_mask = img_mask.to(device)
-        for slice in range(0, img.shape[0], 5):
+
+        # for j in np.linspace(t.start + 5, t.stop - 5, 4):
+        for slice in range(4):
             try:
                 os.makedirs(
                         f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
@@ -121,7 +128,10 @@ def anomalous_validation():
                         )
             except OSError:
                 pass
-            timestep = random.randint(args["sample_distance"] // 2, args["sample_distance"])
+            if args["noise_fn"] == "gauss":
+                random.randint(int(args["sample_distance"] * 0.3), int(args["sample_distance"] * 0.8))
+            else:
+                timestep = random.randint(int(args["sample_distance"] * 0.1), int(args["sample_distance"] * 0.6))
 
             output = diff.forward_backward(
                     unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
@@ -133,7 +143,7 @@ def anomalous_validation():
             plt.axis('off')
             imgs = [[ax.imshow(gridify_output(x, 5), animated=True)] for x in output]
             ani = animation.ArtistAnimation(
-                    fig, imgs, interval=100, blit=True,
+                    fig, imgs, interval=50, blit=True,
                     repeat_delay=1000
                     )
             temp = os.listdir(
