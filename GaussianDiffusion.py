@@ -297,7 +297,7 @@ class GaussianDiffusionModel:
             if see_whole_sequence:
                 seq.append(x.cpu().detach())
 
-        return x.cpu().detach() if not see_whole_sequence else seq
+        return x.detach() if not see_whole_sequence else seq
 
 
     def sample_q(self, x_0, t, noise):
