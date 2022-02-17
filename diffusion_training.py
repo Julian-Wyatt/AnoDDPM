@@ -22,9 +22,14 @@ ROOT_DIR = "./"
 
 
 def train(training_dataset_loader, testing_dataset_loader, args, resume):
+    if args["dataset"].lower() == "cifar":
+        in_channels = 3
+    else:
+        in_channels = 1
     model = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
-                "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
+                "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
+            in_channels=in_channels
             )
 
     betas = get_beta_schedule(args['T'], args['beta_schedule'])
@@ -39,9 +44,11 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             model.load_state_dict(resume["unet"])
         else:
             model.load_state_dict(resume["ema"])
+
         ema = UNetModel(
                 args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
-                    "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"]
+                    "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
+                in_channels=in_channels
                 )
         ema.load_state_dict(resume["ema"])
         start_epoch = resume['n_epoch']
@@ -120,11 +127,15 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
 
 def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('cpu')):
+    try:
+        os.makedirs(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
+    except OSError:
+        pass
     plt.rcParams['figure.dpi'] = 200
     # for i in [args['sample_distance'], args['T'] / 4, None]:
     # for i in [*range(1,args['sample_distance']),args['T']]:
     vlb = []
-    for i in [*range(1, args['sample_distance'], 10)]:
+    for i in [*range(25, args['sample_distance'], 25), args["T"], args["T"], args["T"], args["T"], args["T"]]:
         data = next(testing_dataset_loader)
         x = data["image"]
         x = x.to(device)
@@ -138,7 +149,8 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
                 repeat_delay=1000
                 )
 
-        ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set-t={i}.mp4')
+        files = os.listdir(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
+        ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/t={i}-attempts={len(files) + 1}.mp4')
 
         t_tensor = torch.tensor([i], device=x.device).repeat(x.shape[0])
         eps = diffusion.noise_fn(x, t_tensor)
@@ -267,7 +279,10 @@ if __name__ == '__main__':
             except OSError:
                 pass
         print(file, args)
-        training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)
+        if args["dataset"].lower() == "cifar":
+            training_dataset, testing_dataset = dataset.load_CIFAR10(args, True), dataset.load_CIFAR10(args, False)
+        else:
+            training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)
         training_dataset_loader = dataset.init_dataset_loader(training_dataset, args)
         testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
 
