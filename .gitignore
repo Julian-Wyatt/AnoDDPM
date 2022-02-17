@@ -1,6 +1,6 @@
 library_NFBS
-Train
-Test
+DATASETS/Train
+DATASETS/Test
 model/diff-params-24-11-100epochs
 library_NFBS/NFBS_Dataset.tar
 .idea

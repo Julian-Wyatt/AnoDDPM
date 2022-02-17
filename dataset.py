@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from matplotlib import animation
 from torch.utils.data import Dataset
-from torchvision import transforms
+from torchvision import datasets, transforms
 
 # helper function to make getting another batch of data easier
 import helpers
@@ -151,7 +151,7 @@ def main(save_videos=False):
 def checkDataSet():
     resized = False
     mri_dataset = AnomalousMRIDataset(
-            "CancerousDataset/EdinburghDataset/Anomalous-T1/raw", img_size=(256, 256),
+            "DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1/raw", img_size=(256, 256),
             slice_selection="iterateUnknown", resized=resized
             # slice_selection="random"
             )
@@ -337,7 +337,7 @@ def load_datasets_for_test():
     training, testing = init_datasets("./", args)
 
     ano_dataset = AnomalousMRIDataset(
-            ROOT_DIR=f'./CancerousDataset/EdinburghDataset/Anomalous-T1', img_size=args['img_size'],
+            ROOT_DIR=f'DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1', img_size=args['img_size'],
             slice_selection="random", resized=False
             )
 
@@ -355,12 +355,11 @@ def load_datasets_for_test():
 
 def init_datasets(ROOT_DIR, args):
     training_dataset = MRIDataset(
-            ROOT_DIR=f'{ROOT_DIR}Train/', img_size=args['img_size'], random_slice=args['random_slice']
+            ROOT_DIR=f'{ROOT_DIR}DATASETS/Train/', img_size=args['img_size'], random_slice=args['random_slice']
             )
     testing_dataset = MRIDataset(
-            ROOT_DIR=f'{ROOT_DIR}Test/', img_size=args['img_size'], random_slice=args['random_slice']
+            ROOT_DIR=f'{ROOT_DIR}DATASETS/Test/', img_size=args['img_size'], random_slice=args['random_slice']
             )
-    # testing_dataset = MRIDataset(ROOT_DIR='/content/drive/MyDrive/dissertation data/Anomalous/',transform=transform)
     return training_dataset, testing_dataset
 
 
@@ -555,6 +554,38 @@ class AnomalousMRIDataset(Dataset):
         sample["filenames"] = self.filenames[idx]
         # sample = {'image': image, "filenames": self.filenames[idx], "slices":slice_idx}
         return sample
+
+
+def load_CIFAR10(args, train=True):
+    return torch.utils.data.DataLoader(
+            datasets.CIFAR10(
+                    "./DATASETS/CIFAR10", train=train, download=True, transform=transforms
+                        .Compose(
+                            [
+                                transforms.ToTensor(),
+                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+
+                                ]
+                            )
+                    ),
+            shuffle=True, batch_size=args["Batch_Size"], drop_last=True
+            )
+
+
+def load_ImageNET256(args, train=True):
+    return torch.utils.data.DataLoader(
+            datasets.ImageNet(
+                    "./DATASETS/ImageNet", train=train, download=True, transform=transforms
+                        .Compose(
+                            [
+                                transforms.ToTensor(),
+                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+
+                                ]
+                            )
+                    ),
+            shuffle=True, batch_size=args["Batch_Size"], drop_last=True
+            )
 
 
 def load_image_mask(file, img_size, Ano_Dataset_Class):
