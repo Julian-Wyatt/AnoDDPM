@@ -12,6 +12,7 @@ from matplotlib import animation
 from torch import optim
 
 import dataset
+import evaluation
 from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from helpers import *
 from UNet import UNetModel, update_ema_params
@@ -131,11 +132,12 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
         os.makedirs(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
     except OSError:
         pass
+    ema.eval()
     plt.rcParams['figure.dpi'] = 200
     # for i in [args['sample_distance'], args['T'] / 4, None]:
     # for i in [*range(1,args['sample_distance']),args['T']]:
     vlb = []
-    for i in [*range(25, args['sample_distance'], 25), args["T"], args["T"], args["T"], args["T"], args["T"]]:
+    for i in [*range(100, args['sample_distance'], 50)]:
         data = next(testing_dataset_loader)
         x = data["image"]
         x = x.to(device)
@@ -156,8 +158,29 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
         eps = diffusion.noise_fn(x, t_tensor)
         x_t = diffusion.sample_q(x, t_tensor, eps)
         vlb.append(diffusion.calc_vlb(ema, x, x_t, t_tensor))
-        print(f"saved {i}, VLB: {vlb[-1].detach().cpu().numpy()}")
-    print(f"Test set VLB: {np.mean(vlb)}")
+        # print(f"saved {i}, VLB: {vlb[-1].detach().cpu().numpy()}")
+
+    for epoch in range(40 // args["Batch_Size"] + 5):
+        data = next(testing_dataset_loader)
+        x = data["image"]
+        x = x.to(device)
+
+        t_tensor = torch.tensor([args["T"]], device=x.device).repeat(x.shape[0])
+        eps = diffusion.noise_fn(x, t_tensor)
+        x_t = diffusion.sample_q(x, t_tensor, eps)
+        vlb.append(diffusion.calc_vlb(ema, x, x_t, t_tensor))
+
+    psnr = []
+    for epoch in range(40 // args["Batch_Size"] + 5):
+        data = next(testing_dataset_loader)
+        x = data["image"]
+        x = x.to(device)
+        out = diffusion.forward_backward(ema, x, see_whole_sequence=None, t_distance=args["T"] // 2)
+        psnr.append(evaluation.PSNR(out, x))
+        # t_tensor = torch.tensor([args["T"]//2], device=x.device).repeat(x.shape[0])
+
+    print(f"Test set VLB: {np.mean(vlb)} +- {np.std(vlb)}")
+    print(f"Test set PSNR: {np.mean(psnr)} +- {np.std(psnr)}")
 
 
 def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
