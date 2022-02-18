@@ -23,10 +23,17 @@ ROOT_DIR = "./"
 
 
 def train(training_dataset_loader, testing_dataset_loader, args, resume):
-    if args["dataset"].lower() == "cifar":
-        in_channels = 3
-    else:
-        in_channels = 1
+    """
+
+    :param training_dataset_loader: cycle(dataloader) instance for training
+    :param testing_dataset_loader:  cycle(dataloader) instance for testing
+    :param args: dictionary of parameters
+    :param resume: dictionary of parameters if continuing training from checkpoint
+    :return: Trained model and tested
+    """
+
+    in_channels = 3 if args["dataset"].lower() == "cifar" else 1
+
     model = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
                 "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
@@ -41,14 +48,15 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             )
 
     if resume:
+
         if "unet" in resume:
             model.load_state_dict(resume["unet"])
         else:
             model.load_state_dict(resume["ema"])
 
         ema = UNetModel(
-                args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
-                    "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
+                args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'],
+                dropout=args["dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
                 in_channels=in_channels
                 )
         ema.load_state_dict(resume["ema"])
@@ -59,83 +67,114 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
         ema = copy.deepcopy(model)
 
     tqdm_epoch = range(start_epoch, args['EPOCHS'] + 1)
-
-    ema.to(device)
     model.to(device)
 
     optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'], betas=(0.9, 0.999))
     if resume:
         optimiser.load_state_dict(resume["optimizer_state_dict"])
-    # optimiser.to(device)
+
     del resume
-    startTime = time.time()
+    start_time = time.time()
     losses = []
-    vlb = collections.deque([], maxlen=200)
-    # tqdm_epoch = tqdm.trange(args['EPOCHS'])
+    vlb = collections.deque([], maxlen=10)
+
     # dataset loop
     for epoch in tqdm_epoch:
         mean_loss = []
+
         for i in range(100 // args['Batch_Size']):
             data = next(training_dataset_loader)
-            x = data["image"]
-            x = x.to(device)
+            if args["dataset"] != "cifar":
+                x = data["image"]
+                x = x.to(device)
+            else:
+                # cifar outputs [data,class]
+                x = data[0].to(device)
+
             loss, estimates = diffusion.p_loss(model, x, args)
-            loss_terms, noisy, est = estimates
+            noisy, est = estimates[1], estimates[2]
             optimiser.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
             optimiser.step()
 
             update_ema_params(ema, model)
-
-            if "vlb" in loss_terms:
-                vlb.append(loss_terms["vlb"])
-
             mean_loss.append(loss.data.cpu())
-            # print(f"imgs trained: {(1 + i) * args['Batch_Size'] + epoch * 100}, loss: {loss.data.cpu():.2f} ,"
-            #       f"'last epoch mean loss': {losses[-1] if len(losses)>0 else 0:.4f}\r")
-            # tqdm_epoch.set_postfix({"imgs trained": (1 + i) * args['Batch_Size'] + epoch * 100, "loss": loss.data.cpu() ,'last epoch mean loss': losses[-1] if len(losses)>0 else 0})
+
             if epoch % 50 == 0 and i == 0:
                 row_size = min(8, args['Batch_Size'])
                 training_outputs(
                         diffusion, x, est, noisy, epoch, row_size, save_imgs=args['save_imgs'],
-                        save_vids=args['save_vids'], ema=ema
+                        save_vids=args['save_vids'], ema=ema, args=args
                         )
-                # save(diffusion=diffusion, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
 
         losses.append(np.mean(mean_loss))
         if epoch % 100 == 0:
-            timeTaken = time.time() - startTime
+            time_taken = time.time() - start_time
             remaining_epochs = args['EPOCHS'] - epoch
-            time_per_epoch = timeTaken / (epoch + 1 - start_epoch)
+            time_per_epoch = time_taken / (epoch + 1 - start_epoch)
             hours = remaining_epochs * time_per_epoch / 3600
             mins = (hours % 1) * 60
             hours = int(hours)
-            print(
-                    f"epoch: {epoch}, imgs trained: {(i + 1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
-                    f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
-                    f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f}, VLB: {np.mean(vlb)}"
-                    f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(timeTaken / 3600)}:"
-                    f"{((timeTaken / 3600) % 1) * 60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r"
-                    )
+
+            if epoch % 200 == 0:
+                vlb_terms = diffusion.calc_total_vlb(x, model, args)
+                vlb.append(vlb_terms["total_vlb"].mean(dim=-1).cpu().item())
+                print(
+                        f"epoch: {epoch}, most recent total VLB: {vlb[-1]:.4f} mean total VLB: {np.mean(vlb):.4f}, "
+                        f"prior vlb: {vlb_terms['prior_vlb'].mean(dim=-1).cpu().item():.2f}, vb: "
+                        f"{torch.mean(vlb_terms['vb'], dim=-1).cpu().item():.2f}, x_0_mse: "
+                        f"{torch.mean(vlb_terms['x_0_mse'], dim=-1).cpu().item():.2f}, mse: "
+                        f"{torch.mean(vlb_terms['mse'], dim=-1).cpu().item():.2f}"
+                        f" time elapsed {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+                        f"est time remaining: {hours}:{mins:02.0f}\r"
+                        )
+            else:
+
+                print(
+                        f"epoch: {epoch}, imgs trained: {(i + 1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
+                        f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
+                        f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f}, "
+                        f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(time_taken / 3600)}:"
+                        f"{((time_taken / 3600) % 1) * 60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r"
+                        )
 
         if epoch % 1000 == 0 and epoch >= 0:
             save(unet=model, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
 
     save(unet=model, args=args, optimiser=optimiser, final=True, ema=ema)
 
-    testing(testing_dataset_loader, diffusion, ema=ema, args=args, device=device)
+    testing(testing_dataset_loader, diffusion, ema=ema, args=args, model=model)
 
 
-def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('cpu')):
+def testing(testing_dataset_loader, diffusion, args, ema, model):
+    """
+    Samples videos on test set & calculates some metrics such as PSNR & VLB.
+    PSNR for diffusion is found by sampling x_0 to T//2 and then finding a prediction of x_0
+
+    :param testing_dataset_loader: The cycle(dataloader) object for looping through test set
+    :param diffusion: Gaussian Diffusion model instance
+    :param args: parameters of the model
+    :param ema: exponential moving average unet for sampling
+    :param model: original unet for VLB calc
+    :return: outputs:
+                total VLB    mu +- sigma,
+                prior VLB    mu +- sigma,
+                vb -> T      mu +- sigma,
+                x_0 mse -> T mu +- sigma,
+                mse -> T     mu +- sigma,
+                PSNR         mu +- sigma
+    """
+
     try:
         os.makedirs(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
     except OSError:
         pass
+    ema.to(device)
     ema.eval()
+    model.eval()
+
     plt.rcParams['figure.dpi'] = 200
-    # for i in [args['sample_distance'], args['T'] / 4, None]:
-    # for i in [*range(1,args['sample_distance']),args['T']]:
     vlb = []
     for i in [*range(100, args['sample_distance'], 50)]:
         data = next(testing_dataset_loader)
@@ -154,21 +193,13 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
         files = os.listdir(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
         ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/t={i}-attempts={len(files) + 1}.mp4')
 
-        t_tensor = torch.tensor([i], device=x.device).repeat(x.shape[0])
-        eps = diffusion.noise_fn(x, t_tensor)
-        x_t = diffusion.sample_q(x, t_tensor, eps)
-        vlb.append(diffusion.calc_vlb(ema, x, x_t, t_tensor))
-        # print(f"saved {i}, VLB: {vlb[-1].detach().cpu().numpy()}")
-
     for epoch in range(40 // args["Batch_Size"] + 5):
         data = next(testing_dataset_loader)
         x = data["image"]
         x = x.to(device)
 
-        t_tensor = torch.tensor([args["T"]], device=x.device).repeat(x.shape[0])
-        eps = diffusion.noise_fn(x, t_tensor)
-        x_t = diffusion.sample_q(x, t_tensor, eps)
-        vlb.append(diffusion.calc_vlb(ema, x, x_t, t_tensor))
+        vlb_terms = diffusion.calc_total_vlb(x, model, args)
+        vlb.append(vlb_terms)
 
     psnr = []
     for epoch in range(40 // args["Batch_Size"] + 5):
@@ -177,13 +208,41 @@ def testing(testing_dataset_loader, diffusion, args, ema, device=torch.device('c
         x = x.to(device)
         out = diffusion.forward_backward(ema, x, see_whole_sequence=None, t_distance=args["T"] // 2)
         psnr.append(evaluation.PSNR(out, x))
-        # t_tensor = torch.tensor([args["T"]//2], device=x.device).repeat(x.shape[0])
 
-    print(f"Test set VLB: {np.mean(vlb)} +- {np.std(vlb)}")
+    print(
+            f"Test set total VLB: {np.mean([i['total_vlb'].mean(dim=-1).cpu().item() for i in vlb])} +- {np.std([i['total_vlb'].mean(dim=-1).cpu().item() for i in vlb])}"
+            )
+    print(
+            f"Test set prior VLB: {np.mean([i['prior_vlb'].mean(dim=-1).cpu().item() for i in vlb])} +-"
+            f" {np.std([i['prior_vlb'].mean(dim=-1).cpu().item() for i in vlb])}"
+            )
+    print(
+            f"Test set vb: {np.mean([torch.mean(i['vb'], dim=-1).cpu().item() for i in vlb])} "
+            f"+- {np.std([torch.mean(i['vb'], dim=-1).cpu().item() for i in vlb])}"
+            )
+    print(
+            f"Test set x_0_mse: {np.mean([torch.mean(i['x_0_mse'], dim=-1).cpu().item() for i in vlb])} "
+            f"+- {np.std([torch.mean(i['x_0_mse'], dim=-1).cpu().item() for i in vlb])}"
+            )
+    print(
+            f"Test set mse: {np.mean([torch.mean(i['mse'], dim=-1).cpu().item() for i in vlb])}"
+            f" +- {np.std([torch.mean(i['mse'], dim=-1).cpu().item() for i in vlb])}"
+            )
     print(f"Test set PSNR: {np.mean(psnr)} +- {np.std(psnr)}")
 
 
 def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
+    """
+    Save model final or checkpoint
+    :param final: bool for final vs checkpoint
+    :param unet: unet instance
+    :param optimiser: ADAM optim
+    :param args: model parameters
+    :param ema: ema instance
+    :param loss: loss for checkpoint
+    :param epoch: epoch for checkpoint
+    :return: saved model
+    """
     if final:
         torch.save(
                 {
@@ -208,13 +267,26 @@ def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
                 )
 
 
-
-def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=False, save_vids=False):
+def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, args, save_imgs=False, save_vids=False):
+    """
+    Saves video & images based on args info
+    :param diffusion: diffusion model instance
+    :param x: x_0 real data value
+    :param est: estimate of the noise at x_t (output of the model)
+    :param noisy: x_t
+    :param epoch:
+    :param row_size: rows for outputs into torchvision.utils.make_grid
+    :param ema: exponential moving average unet for sampling
+    :param save_imgs: bool for saving imgs
+    :param save_vids: bool for saving diffusion videos
+    :return:
+    """
     try:
         os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}')
         os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}')
     except OSError:
         pass
+    ema.to(device)
     if save_imgs:
         if epoch % 100 == 0:
             # for a given t, output x_0, & prediction of x_(t-1), and x_0
@@ -257,24 +329,28 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, save_imgs=F
             ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/sample-EPOCH={epoch}.mp4')
 
     plt.close('all')
+    ema.to('cpu')
 
 
-
-if __name__ == '__main__':
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    seed(1)
-
+def main():
+    """
+        Load arguments, run training and testing functions, then remove checkpoint directory
+    :return:
+    """
+    # make directories
     for i in ['./model/', "./diffusion-videos/", './diffusion-training-images/']:
         try:
             os.makedirs(i)
         except OSError:
             pass
 
+    # read file from argument
     if len(sys.argv[1:]) > 0:
         files = sys.argv[1:]
     else:
         raise ValueError("Missing file argument")
 
+    # resume from final or resume from most recent checkpoint -> ran from specific slurm script?
     resume = 0
     if files[0] == "RESUME_RECENT":
         resume = 1
@@ -287,50 +363,76 @@ if __name__ == '__main__':
         if len(files) == 0:
             raise ValueError("Missing file argument")
 
+    # allow different arg inputs ie 25 or args15 which are converted into argsNUM.json
     file = files[0]
-    if file[-5:] == ".json":
-        with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
-            args = json.load(f)
-        args['arg_num'] = file[4:-5]
-        args = defaultdict_from_json(args)
-        for i in [f'./model/diff-params-ARGS={args["arg_num"]}',
-                  f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint',
-                  f'./diffusion-videos/ARGS={args["arg_num"]}',
-                  f'./diffusion-training-images/ARGS={args["arg_num"]}']:
-            try:
-                os.makedirs(i)
-            except OSError:
-                pass
-        print(file, args)
-        if args["dataset"].lower() == "cifar":
-            training_dataset, testing_dataset = dataset.load_CIFAR10(args, True), dataset.load_CIFAR10(args, False)
-        else:
-            training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)
+    if file.isnumeric():
+        file = f"args{file}.json"
+    elif file[:4] == "args" and file[-5:] == ".json":
+        pass
+    elif file[:4] == "args":
+        file = f"args{file[4:]}.json"
+    else:
+        raise ValueError("File Argument is not a json file")
+
+    # load the json args
+    with open(f'{ROOT_DIR}test_args/{file}', 'r') as f:
+        args = json.load(f)
+    args['arg_num'] = file[4:-5]
+    args = defaultdict_from_json(args)
+
+    # make arg specific directories
+    for i in [f'./model/diff-params-ARGS={args["arg_num"]}',
+              f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint',
+              f'./diffusion-videos/ARGS={args["arg_num"]}',
+              f'./diffusion-training-images/ARGS={args["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    print(file, args)
+
+    # if dataset is cifar, load different training & test set
+    if args["dataset"].lower() == "cifar":
+        training_dataset_loader_, testing_dataset_loader_ = dataset.load_CIFAR10(args, True), \
+                                                            dataset.load_CIFAR10(args, False)
+        training_dataset_loader = dataset.cycle(training_dataset_loader_)
+        testing_dataset_loader = dataset.cycle(testing_dataset_loader_)
+    else:
+        # load NFBS dataset
+        training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)
         training_dataset_loader = dataset.init_dataset_loader(training_dataset, args)
         testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
 
-        loaded_model = {}
-        if resume:
-            if resume == 1:
-                checkpoints = os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
-                checkpoints.sort(reverse=True)
-                for i in checkpoints:
-                    try:
-                        file_dir = f"./model/diff-params-ARGS={args['arg_num']}/checkpoint/{i}"
-                        loaded_model = torch.load(file_dir, map_location=device)
-                        break
-                    except RuntimeError:
-                        continue
+    # if resuming, loaded model is attached to the dictionary
+    loaded_model = {}
+    if resume:
+        if resume == 1:
+            checkpoints = os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
+            checkpoints.sort(reverse=True)
+            for i in checkpoints:
+                try:
+                    file_dir = f"./model/diff-params-ARGS={args['arg_num']}/checkpoint/{i}"
+                    loaded_model = torch.load(file_dir, map_location=device)
+                    break
+                except RuntimeError:
+                    continue
 
-            else:
-                file_dir = f'./model/diff-params-ARGS={args["arg_num"]}/params-final.pt'
-                loaded_model = torch.load(file_dir, map_location=device)
-        # load, pass args
-        train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
+        else:
+            file_dir = f'./model/diff-params-ARGS={args["arg_num"]}/params-final.pt'
+            loaded_model = torch.load(file_dir, map_location=device)
 
-        for f in os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint'):
-            os.remove(os.path.join(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint', f))
-        os.removedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
+    # load, pass args
+    train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
 
-    else:
-        raise ValueError("File Argument is not a json file")
+    # remove checkpoints after final_param is saved (due to storage requirements)
+    for f in os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint'):
+        os.remove(os.path.join(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint', f))
+    os.removedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
+
+
+if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    seed(1)
+
+    main()
