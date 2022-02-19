@@ -68,7 +68,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
     tqdm_epoch = range(start_epoch, args['EPOCHS'] + 1)
     model.to(device)
-
+    ema.to(device)
     optimiser = optim.AdamW(model.parameters(), lr=args['lr'], weight_decay=args['weight_decay'], betas=(0.9, 0.999))
     if resume:
         optimiser.load_state_dict(resume["optimizer_state_dict"])
@@ -77,12 +77,13 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     start_time = time.time()
     losses = []
     vlb = collections.deque([], maxlen=10)
+    iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(200)
 
     # dataset loop
     for epoch in tqdm_epoch:
         mean_loss = []
 
-        for i in range(100 // args['Batch_Size']):
+        for i in iters:
             data = next(training_dataset_loader)
             if args["dataset"] != "cifar":
                 x = data["image"]
@@ -109,7 +110,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
                         )
 
         losses.append(np.mean(mean_loss))
-        if epoch % 100 == 0:
+        if epoch % 200 == 0:
             time_taken = time.time() - start_time
             remaining_epochs = args['EPOCHS'] - epoch
             time_per_epoch = time_taken / (epoch + 1 - start_epoch)
@@ -117,27 +118,27 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             mins = (hours % 1) * 60
             hours = int(hours)
 
-            if epoch % 200 == 0:
-                vlb_terms = diffusion.calc_total_vlb(x, model, args)
-                vlb.append(vlb_terms["total_vlb"].mean(dim=-1).cpu().item())
-                print(
-                        f"epoch: {epoch}, most recent total VLB: {vlb[-1]:.4f} mean total VLB: {np.mean(vlb):.4f}, "
-                        f"prior vlb: {vlb_terms['prior_vlb'].mean(dim=-1).cpu().item():.2f}, vb: "
-                        f"{torch.mean(vlb_terms['vb'], dim=-1).cpu().item():.2f}, x_0_mse: "
-                        f"{torch.mean(vlb_terms['x_0_mse'], dim=-1).cpu().item():.2f}, mse: "
-                        f"{torch.mean(vlb_terms['mse'], dim=-1).cpu().item():.2f}"
-                        f" time elapsed {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
-                        f"est time remaining: {hours}:{mins:02.0f}\r"
-                        )
-            else:
-
-                print(
-                        f"epoch: {epoch}, imgs trained: {(i + 1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
-                        f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
-                        f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f}, "
-                        f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(time_taken / 3600)}:"
-                        f"{((time_taken / 3600) % 1) * 60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r"
-                        )
+            vlb_terms = diffusion.calc_total_vlb(x, model, args)
+            vlb.append(vlb_terms["total_vlb"].mean(dim=-1).cpu().item())
+            print(
+                    f"epoch: {epoch}, most recent total VLB: {vlb[-1]} mean total VLB:"
+                    f" {np.mean(vlb):.4f}, "
+                    f"prior vlb: {vlb_terms['prior_vlb'].mean(dim=-1).cpu().item():.2f}, vb: "
+                    f"{torch.mean(vlb_terms['vb'], dim=list(range(2))).cpu().item():.2f}, x_0_mse: "
+                    f"{torch.mean(vlb_terms['x_0_mse'], dim=list(range(2))).cpu().item():.2f}, mse: "
+                    f"{torch.mean(vlb_terms['mse'], dim=list(range(2))).cpu().item():.2f}"
+                    f" time elapsed {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+                    f"est time remaining: {hours}:{mins:02.0f}\r"
+                    )
+            # else:
+            #
+            #     print(
+            #             f"epoch: {epoch}, imgs trained: {(i + 1) * args['Batch_Size'] + epoch * 100}, last 20 epoch mean loss:"
+            #             f" {np.mean(losses[-20:]):.4f} , last 100 epoch mean loss:"
+            #             f" {np.mean(losses[-100:]) if len(losses) > 0 else 0:.4f}, "
+            #             f"time per epoch {time_per_epoch:.2f}s, time elapsed {int(time_taken / 3600)}:"
+            #             f"{((time_taken / 3600) % 1) * 60:02.0f}, est time remaining: {hours}:{mins:02.0f}\r"
+            #             )
 
         if epoch % 1000 == 0 and epoch >= 0:
             save(unet=model, args=args, optimiser=optimiser, final=False, ema=ema, epoch=epoch)
@@ -170,7 +171,6 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
         os.makedirs(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
     except OSError:
         pass
-    ema.to(device)
     ema.eval()
     model.eval()
 
@@ -178,8 +178,13 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
     vlb = []
     for i in [*range(100, args['sample_distance'], 50)]:
         data = next(testing_dataset_loader)
-        x = data["image"]
-        x = x.to(device)
+        if args["dataset"] != "cifar":
+            x = data["image"]
+            x = x.to(device)
+        else:
+            # cifar outputs [data,class]
+            x = data[0].to(device)
+
         row_size = min(5, args['Batch_Size'])
 
         fig, ax = plt.subplots()
@@ -195,8 +200,12 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
 
     for epoch in range(40 // args["Batch_Size"] + 5):
         data = next(testing_dataset_loader)
-        x = data["image"]
-        x = x.to(device)
+        if args["dataset"] != "cifar":
+            x = data["image"]
+            x = x.to(device)
+        else:
+            # cifar outputs [data,class]
+            x = data[0].to(device)
 
         vlb_terms = diffusion.calc_total_vlb(x, model, args)
         vlb.append(vlb_terms)
@@ -204,8 +213,13 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
     psnr = []
     for epoch in range(40 // args["Batch_Size"] + 5):
         data = next(testing_dataset_loader)
-        x = data["image"]
-        x = x.to(device)
+        if args["dataset"] != "cifar":
+            x = data["image"]
+            x = x.to(device)
+        else:
+            # cifar outputs [data,class]
+            x = data[0].to(device)
+
         out = diffusion.forward_backward(ema, x, see_whole_sequence=None, t_distance=args["T"] // 2)
         psnr.append(evaluation.PSNR(out, x))
 
@@ -286,7 +300,6 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, args, save_
         os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}')
     except OSError:
         pass
-    ema.to(device)
     if save_imgs:
         if epoch % 100 == 0:
             # for a given t, output x_0, & prediction of x_(t-1), and x_0
@@ -317,19 +330,18 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, args, save_
         if epoch % 500 == 0:
             plt.rcParams['figure.dpi'] = 200
             if epoch % 1000 == 0:
-                out = diffusion.forward_backward(ema, x, "whole", args['sample_distance'])
-            else:
                 out = diffusion.forward_backward(ema, x, "half", args['sample_distance'])
+            else:
+                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'] // 2)
             imgs = [[ax.imshow(gridify_output(x, row_size), animated=True)] for x in out]
             ani = animation.ArtistAnimation(
-                    fig, imgs, interval=100, blit=True,
+                    fig, imgs, interval=50, blit=True,
                     repeat_delay=1000
                     )
 
             ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/sample-EPOCH={epoch}.mp4')
 
     plt.close('all')
-    ema.to('cpu')
 
 
 def main():
@@ -426,8 +438,8 @@ def main():
     train(training_dataset_loader, testing_dataset_loader, args, loaded_model)
 
     # remove checkpoints after final_param is saved (due to storage requirements)
-    for f in os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint'):
-        os.remove(os.path.join(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint', f))
+    for file_remove in os.listdir(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint'):
+        os.remove(os.path.join(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint', file_remove))
     os.removedirs(f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint')
 
 
