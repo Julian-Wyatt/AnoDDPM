@@ -6,6 +6,7 @@ import sys
 # import matplotlib
 # matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib import animation
 
 import dataset
@@ -18,42 +19,56 @@ DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename):
-    mse = ((recon - real).square() * 2) - 1
-    mse_threshold = mse > 0
-    mse_threshold = (mse_threshold.float() * 2) - 1
-    output = torch.cat((real, recon, mse, mse_threshold, mask))
-    # plt.imshow(gridify_output(mse, 3)[..., 0], cmap="YlOrRd")
-    # plt.colorbar()
-    plt.imshow(gridify_output(output, 5)[..., 0], cmap="gray")
-    plt.axis('off')
-    plt.savefig(filename)
-    plt.clf()
-
-    dice = evaluation.dice_coeff(real, recon, mse=mse, real_mask=mask)
-    return dice
-
+def load_checkpoint(param, use_checkpoint):
+    """
+    loads the most recent (non-corrupted) checkpoint or the final model
+    :param param: args number
+    :param use_checkpoint: checkpointed or final model
+    :return:
+    """
+    if not use_checkpoint:
+        return torch.load(f'./model/diff-params-ARGS={param}/params-final.pt', map_location=device)
+    else:
+        checkpoints = os.listdir(f'./model/diff-params-ARGS={param}/checkpoint')
+        checkpoints.sort(reverse=True)
+        for i in checkpoints:
+            try:
+                file_dir = f"./model/diff-params-ARGS={param}/checkpoint/{i}"
+                loaded_model = torch.load(file_dir, map_location=device)
+                break
+            except RuntimeError:
+                continue
+        return loaded_model
 
 
 def load_parameters():
+    """
+    Loads the trained parameters for the detection model
+    :return:
+    """
     if len(sys.argv[1:]) > 0:
         params = sys.argv[1:]
     else:
         params = os.listdir("./model")
     if ".DS_Store" in params:
         params.remove(".DS_Store")
+
+    if params[0] == "CHECKPOINT":
+        use_checkpoint = True
+        params = params[1:]
+    else:
+        use_checkpoint = False
+
     print(params)
     for param in params:
         if param.isnumeric():
-            output = torch.load(f'./model/diff-params-ARGS={param}/params-final.pt', map_location=device)
+            output = load_checkpoint(param, use_checkpoint)
         elif param[:4] == "args" and param[-5:] == ".json":
-            output = torch.load(f'./model/diff-params-ARGS={param[4:-5]}/params-final.pt', map_location=device)
+            output = load_checkpoint(param[4:-5], use_checkpoint)
         elif param[:4] == "args":
-            output = torch.load(f'./model/diff-params-ARGS={param[4:]}/params-final.pt', map_location=device)
+            output = load_checkpoint(param[4:], use_checkpoint)
         else:
-            # if checkpointed version
-            # output = torch.load(f'./model/{param}/checkpoint/diff_epoch=0.pt', map_location=device)
-            output = torch.load(f'./model/{param}/params-final.pt', map_location=device)
+            raise ValueError(f"Unsupported input {param}")
 
         if "args" in output:
             args = output["args"]
@@ -64,8 +79,7 @@ def load_parameters():
                 args['arg_num'] = param[17:]
                 args = defaultdict_from_json(args)
             except FileNotFoundError:
-                print(f"args{param[17:]} doesn't exist for {param}")
-                raise
+                raise ValueError(f"args{param[17:]} doesn't exist for {param}")
 
         if "noise_fn" not in args:
             args["noise_fn"] = "gauss"
@@ -75,7 +89,7 @@ def load_parameters():
 
 def anomalous_validation():
     """
-    Iterates over each anomalous slice, returning forward backward's for it,
+    Iterates over 4 anomalous slices for each Volume, returning diffused video for it,
     the heatmap of that & detection method (A&B) or C
     :return:
     """
@@ -105,6 +119,7 @@ def anomalous_validation():
     except OSError:
         pass
 
+    # make folder for each anomalous volume
     for i in AnoDataset.slices.keys():
         try:
             os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{i}')
@@ -119,22 +134,21 @@ def anomalous_validation():
         img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], AnoDataset)
         img_mask = img_mask.to(device)
 
-        # for j in np.linspace(t.start + 5, t.stop - 5, 4):
-        for slice in range(4):
+        for slice_number in range(4):
             try:
                 os.makedirs(
                         f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
-                        f'{new["slices"][slice].numpy()[0]}'
+                        f'{new["slices"][slice_number].numpy()[0]}'
                         )
             except OSError:
                 pass
             if args["noise_fn"] == "gauss":
-                random.randint(int(args["sample_distance"] * 0.3), int(args["sample_distance"] * 0.8))
+                timestep = random.randint(int(args["sample_distance"] * 0.3), int(args["sample_distance"] * 0.8))
             else:
                 timestep = random.randint(int(args["sample_distance"] * 0.1), int(args["sample_distance"] * 0.6))
 
             output = diff.forward_backward(
-                    unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                    unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                     see_whole_sequence="whole",
                     t_distance=timestep
                     )
@@ -148,108 +162,58 @@ def anomalous_validation():
                     )
             temp = os.listdir(
                     f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
-                    f'{new["slices"][slice].numpy()[0]}'
+                    f'{new["slices"][slice_number].numpy()[0]}'
                     )
 
             output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
-                          f'{new["filenames"][0][-9:-4]}/{new["slices"][slice].numpy()[0]}/t={timestep}-attemp' \
+                          f'{new["filenames"][0][-9:-4]}/{new["slices"][slice_number].numpy()[0]}/t={timestep}-attemp' \
                           f't={len(temp) + 1}'
             ani.save(output_name + ".mp4")
 
-            heatmap(
-                    img[slice, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
-                    img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]),
-                    output_name + ".png"
+            dice_data.append(
+                    evaluation.heatmap(
+                            img[slice_number, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
+                            img_mask[new["slices"][slice_number].numpy()[0], ...].reshape(1, 1, *args["img_size"]),
+                            output_name + ".png"
+                            )
                     )
 
             plt.close('all')
 
             if args["noise_fn"] == "gauss":
-                diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
-                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "gauss"
+                dice = diff.detection_B(
+                        unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "gauss",
+                        total_avg=3
                         )
+                dice_data.append(dice)
             elif args["noise_fn"] == "simplex":
-                diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
-                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave"
+                dice = diff.detection_B(
+                        unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave",
+                        total_avg=3
                         )
+                dice_data.append(dice)
             elif args["noise_fn"] == "simplex_randParam":
                 diff.detection_A(
                         unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
                         img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"])
                         )
-                diff.detection_B(
-                        unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
-                        args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave"
+                dice = diff.detection_B(
+                        unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                        args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
+                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave",
+                        total_avg=3
                         )
+                dice_data.append(dice)
+
+    print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
 
 
 
 
 if __name__ == "__main__":
     anomalous_validation()
-
-    # print(f"args{args['arg_num']}")
-    # unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
-    #
-    # betas = get_beta_schedule(args['T'], args['beta_schedule'])
-    #
-    # diff = GaussianDiffusionModel(
-    #         args['img_size'], betas, loss_weight=args['loss_weight'],
-    #         loss_type=args['loss-type'], noise=args["noise_fn"]
-    #         )
-    #
-    # unet.load_state_dict(output["ema"])
-    # unet.to(device)
-    #
-    # AnoDataset = dataset.AnomalousMRIDataset(
-    #         ROOT_DIR=f'{dataset_path}', img_size=args['img_size'],
-    #         slice_selection="random", resized=True
-    #         )
-    # loader = init_dataset_loader(AnoDataset, args)
-    #
-    # try:
-    #     os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous')
-    # except OSError:
-    #     pass
-    #
-    # for epoch in range(5):
-    #     for i in range(len(AnoDataset)):
-    #         new = next(loader)
-    #         img = new["image"].to(device)
-    #         timestep = random.randint(60, args["sample_distance"])
-    #
-    #         output = diff.forward_backward(unet, img, see_whole_sequence="whole", t_distance=timestep)
-    #         fig, ax = plt.subplots()
-    #
-    #         plt.rcParams['figure.dpi'] = 200
-    #
-    #         imgs = [[ax.imshow(output_img(x, 1), animated=True)] for x in output]
-    #         ani = animation.ArtistAnimation(
-    #                 fig, imgs, interval=100, blit=True,
-    #                 repeat_delay=1000
-    #                 )
-    #
-    #         try:
-    #             os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
-    #         except OSError:
-    #             pass
-    #
-    #         temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}')
-    #
-    #         output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/t={timestep}-attemp' \
-    #                       f't={len(temp) + 1}.mp4'
-    #         if "slices" in new:
-    #             output_name = f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/' \
-    #                           f'{new["filenames"][0][-9:-4]}/slices={new["slices"].tolist()}-t={timestep}-attemp' \
-    #                           f't={len(temp) + 1}'
-    #         ani.save(output_name + ".mp4")
-    #
-    #         heatmap(img, output[-1].to(device), output_name + ".png")
-    #
-    #         plt.close('all')
