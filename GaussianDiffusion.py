@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from perlin_numpy import generate_fractal_noise_2d
 
+import evaluation
 from helpers import *
 from simplex import Simplex_CLASS
 
@@ -206,6 +207,26 @@ class GaussianDiffusionModel:
         return (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape, x_t.device) * x_t
                 - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape, x_t.device) * eps)
 
+    def predict_eps_from_x_0(self, x_t, t, pred_x_0):
+        return (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape, x_t.device) * x_t
+                - pred_x_0) \
+               / extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape, x_t.device)
+
+    def q_mean_variance(self, x_0, t):
+        """
+        Get the distribution q(x_t | x_0).
+        :param x_start: the [N x C x ...] tensor of noiseless inputs.
+        :param t: the number of diffusion steps (minus 1). Here, 0 means one step.
+        :return: A tuple (mean, variance, log_variance), all of x_start's shape.
+        """
+        mean = (
+                extract(self.sqrt_alphas_cumprod, t, x_0.shape, x_0.device) * x_0
+        )
+        variance = extract(1.0 - self.alphas_cumprod, t, x_0.shape, x_0.device)
+        log_variance = extract(
+                self.log_one_minus_alphas_cumprod, t, x_0.shape, x_0.device
+                )
+        return mean, variance, log_variance
 
     def q_posterior_mean_variance(self, x_0, x_t, t):
         """
@@ -223,7 +244,7 @@ class GaussianDiffusionModel:
         posterior_log_var_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape, x_t.device)
         return posterior_mean, posterior_var, posterior_log_var_clipped
 
-    def p_mean_variance(self, model, x_t, t):
+    def p_mean_variance(self, model, x_t, t, estimate_noise=None):
         """
         Finds the mean & variance from N(x_{t-1}; mu_theta(x_t,t), sigma_theta (x_t,t))
 
@@ -232,7 +253,8 @@ class GaussianDiffusionModel:
         :param t:
         :return:
         """
-        model_output = model(x_t, t)
+        if estimate_noise == None:
+            estimate_noise = model(x_t, t)
 
         # fixed model variance defined as \hat{\beta}_t - could add learned parameter
         model_var = np.append(self.posterior_variance[1], self.betas[1:])
@@ -240,7 +262,7 @@ class GaussianDiffusionModel:
         model_var = extract(model_var, t, x_t.shape, x_t.device)
         model_logvar = extract(model_logvar, t, x_t.shape, x_t.device)
 
-        pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1, 1), t, model_output)
+        pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1, 1), t, estimate_noise)
         model_mean, _, _ = self.q_posterior_mean_variance(
                 pred_x_0, x_t, t
                 )
@@ -262,7 +284,6 @@ class GaussianDiffusionModel:
         sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_x_0": out["pred_x_0"]}
 
-
     def forward_backward(self, model, x, see_whole_sequence="half", t_distance=None):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
@@ -281,7 +302,7 @@ class GaussianDiffusionModel:
                 seq.append(x.cpu().detach())
         else:
             # x = self.sample_q(x,torch.tensor([t_distance], device=x.device).repeat(x.shape[0]),torch.randn_like(x))
-            t_tensor = torch.tensor([t_distance], device=x.device).repeat(x.shape[0])
+            t_tensor = torch.tensor([t_distance - 1], device=x.device).repeat(x.shape[0])
             x = self.sample_q(
                     x, t_tensor,
                     self.noise_fn(x, t_tensor).float()
@@ -298,7 +319,6 @@ class GaussianDiffusionModel:
                 seq.append(x.cpu().detach())
 
         return x.detach() if not see_whole_sequence else seq
-
 
     def sample_q(self, x_0, t, noise):
         """
@@ -323,10 +343,10 @@ class GaussianDiffusionModel:
         return (extract(self.sqrt_alphas, t, x_t.shape, x_t.device) * x_t +
                 extract(self.sqrt_betas, t, x_t.shape, x_t.device) * noise)
 
-    def calc_vlb(self, model, x_0, x_t, t):
+    def calc_vlb_xt(self, model, x_0, x_t, t, estimate_noise=None):
         # find KL divergence at t
         true_mean, _, true_log_var = self.q_posterior_mean_variance(x_0, x_t, t)
-        output = self.p_mean_variance(model, x_t, t)
+        output = self.p_mean_variance(model, x_t, t, estimate_noise)
         kl = normal_kl(true_mean, true_log_var, output["mean"], output["log_variance"])
         kl = mean_flat(kl) / np.log(2.0)
 
@@ -335,9 +355,8 @@ class GaussianDiffusionModel:
                 )
         decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
 
-        output = torch.where((t == 0), decoder_nll, kl)
-        return output
-
+        nll = torch.where((t == 0), decoder_nll, kl)
+        return {"output": nll, "pred_x_0": output["pred_x_0"]}
 
     def calc_loss(self, model, x_0, t):
         # noise = torch.randn_like(x)
@@ -346,18 +365,17 @@ class GaussianDiffusionModel:
         x_t = self.sample_q(x_0, t, noise)
         estimate_noise = model(x_t, t)
         loss = {}
-        loss["vlb"] = self.calc_vlb(model, x_0, x_t, t)
         if self.loss_type == "l1":
             loss["loss"] = mean_flat((estimate_noise - noise).abs())
         elif self.loss_type == "l2":
             loss["loss"] = mean_flat((estimate_noise - noise).square())
         elif self.loss_type == "hybrid":
             # add vlb term
+            loss["vlb"] = self.calc_vlb_xt(model, x_0, x_t, t, estimate_noise)["output"]
             loss["loss"] = loss["vlb"] + mean_flat((estimate_noise - noise).square())
         else:
             loss["loss"] = mean_flat((estimate_noise - noise).square())
         return loss, x_t, estimate_noise
-
 
     def p_loss(self, model, x_0, args):
         if self.loss_weight == "none":
@@ -373,11 +391,54 @@ class GaussianDiffusionModel:
             t, weights = self.sample_t_with_weights(x_0.shape[0], x_0.device)
 
         loss, x_t, eps_t = self.calc_loss(model, x_0, t)
-        loss = ((loss["loss"] * weights).mean(), loss)
+        loss = ((loss["loss"] * weights).mean(), (loss, x_t, eps_t))
         return loss
 
+    def prior_vlb(self, x_0, args):
+        t = torch.tensor([self.num_timesteps - 1] * args["Batch_Size"], device=x_0.device)
+        qt_mean, _, qt_log_variance = self.q_mean_variance(x_0, t)
+        kl_prior = normal_kl(
+                mean1=qt_mean, logvar1=qt_log_variance, mean2=torch.tensor(0.0, device=x_0.device),
+                logvar2=torch.tensor(0.0, device=x_0.device)
+                )
+        return mean_flat(kl_prior) / np.log(2.0)
 
-    def detection_A(self, model, x_0, args, file, mask):
+    def calc_total_vlb(self, x_0, model, args):
+        vb = []
+        x_0_mse = []
+        mse = []
+        for t in reversed(list(range(self.num_timesteps))):
+            t_batch = torch.tensor([t] * args["Batch_Size"], device=x_0.device)
+            noise = torch.randn_like(x_0)
+            x_t = self.sample_q(x_0=x_0, t=t_batch, noise=noise)
+            # Calculate VLB term at the current timestep
+            with torch.no_grad():
+                out = self.calc_vlb_xt(
+                        model,
+                        x_0=x_0,
+                        x_t=x_t,
+                        t=t_batch,
+                        )
+            vb.append(out["output"])
+            x_0_mse.append(mean_flat((out["pred_x_0"] - x_0) ** 2))
+            eps = self.predict_eps_from_x_0(x_t, t_batch, out["pred_x_0"])
+            mse.append(mean_flat((eps - noise) ** 2))
+
+        vb = torch.stack(vb, dim=1)
+        x_0_mse = torch.stack(x_0_mse, dim=1)
+        mse = torch.stack(mse, dim=1)
+
+        prior_vlb = self.prior_vlb(x_0, args)
+        total_vlb = vb.sum(dim=1) + prior_vlb
+        return {
+            "total_vlb": total_vlb,
+            "prior_vlb": prior_vlb,
+            "vb":        vb,
+            "x_0_mse":   x_0_mse,
+            "mse":       mse,
+            }
+
+    def detection_A(self, model, x_0, args, file, mask, total_avg=2):
         for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
                   f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/",
                   f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/A"]:
@@ -390,9 +451,9 @@ class GaussianDiffusionModel:
             freq = 2 ** i
             self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
 
-            for t_distance in range(50, args["sample_distance"], 50):
-                output = torch.empty((10, 1, *args["img_size"]), device=x_0.device)
-                for avg in range(10):
+            for t_distance in range(50, int(args["T"] * 0.6), 50):
+                output = torch.empty((total_avg, 1, *args["img_size"]), device=x_0.device)
+                for avg in range(total_avg):
 
                     t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
                     x = self.sample_q(
@@ -425,7 +486,7 @@ class GaussianDiffusionModel:
                         )
                 plt.clf()
 
-    def detection_B(self, model, x_0, args, file, mask, func_type="octave"):
+    def detection_B(self, model, x_0, args, file, mask, func_type="octave", total_avg=5):
         assert type(file) == tuple
         for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
                   f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}",
@@ -435,16 +496,19 @@ class GaussianDiffusionModel:
             except OSError:
                 pass
         if func_type == "octave":
+            end = int(args["T"] * 0.6)
             self.noise_fn = lambda x, t: generate_simplex_noise(
                     self.simplex, x, t, False, frequency=64, octave=6,
                     persistence=0.8
                     )
         else:
+            end = int(args["T"] * 0.8)
             self.noise_fn = lambda x, t: torch.randn_like(x)
-
-        for t_distance in range(50, args["sample_distance"], 50):
-            output = torch.empty((10, 1, *args["img_size"]), device=x_0.device)
-            for avg in range(10):
+        # multiprocessing?
+        dice_coeff = []
+        for t_distance in range(50, end, 50):
+            output = torch.empty((total_avg, 1, *args["img_size"]), device=x_0.device)
+            for avg in range(total_avg):
 
                 t_tensor = torch.tensor([t_distance], device=x_0.device).repeat(x_0.shape[0])
                 x = self.sample_q(
@@ -462,6 +526,14 @@ class GaussianDiffusionModel:
 
             # save image containing initial, each final denoised image, mean & mse
             output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *args["img_size"])
+
+            dice = evaluation.heatmap(
+                    real=x_0, recon=output_mean, mask=mask,
+                    filename=f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/'
+                             f'{func_type}/heatmap-t'
+                             f'={t_distance}-{len(temp) + 1}.png'
+                    )
+
             mse = ((output_mean - x_0).square() * 2) - 1
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
@@ -477,7 +549,8 @@ class GaussianDiffusionModel:
                     )
             plt.clf()
 
-
+            dice_coeff.append(dice)
+        return dice_coeff
 
 
 x = """
