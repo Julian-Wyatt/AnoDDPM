@@ -254,7 +254,7 @@ class UNetModel(nn.Module):
         self.image_size = img_size
         self.in_channels = in_channels
         self.model_channels = base_channels
-        self.out_channels = 1
+        self.out_channels = in_channels
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = attention_resolutions
         self.dropout = dropout
