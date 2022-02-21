@@ -77,7 +77,8 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     start_time = time.time()
     losses = []
     vlb = collections.deque([], maxlen=10)
-    iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(200)
+    iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(256)
+    # iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(150)
 
     # dataset loop
     for epoch in tqdm_epoch:
@@ -145,104 +146,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
     save(unet=model, args=args, optimiser=optimiser, final=True, ema=ema)
 
-    testing(testing_dataset_loader, diffusion, ema=ema, args=args, model=model)
-
-
-def testing(testing_dataset_loader, diffusion, args, ema, model):
-    """
-    Samples videos on test set & calculates some metrics such as PSNR & VLB.
-    PSNR for diffusion is found by sampling x_0 to T//2 and then finding a prediction of x_0
-
-    :param testing_dataset_loader: The cycle(dataloader) object for looping through test set
-    :param diffusion: Gaussian Diffusion model instance
-    :param args: parameters of the model
-    :param ema: exponential moving average unet for sampling
-    :param model: original unet for VLB calc
-    :return: outputs:
-                total VLB    mu +- sigma,
-                prior VLB    mu +- sigma,
-                vb -> T      mu +- sigma,
-                x_0 mse -> T mu +- sigma,
-                mse -> T     mu +- sigma,
-                PSNR         mu +- sigma
-    """
-
-    try:
-        os.makedirs(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
-    except OSError:
-        pass
-    ema.eval()
-    model.eval()
-
-    plt.rcParams['figure.dpi'] = 200
-    vlb = []
-    for i in [*range(100, args['sample_distance'], 50)]:
-        data = next(testing_dataset_loader)
-        if args["dataset"] != "cifar":
-            x = data["image"]
-            x = x.to(device)
-        else:
-            # cifar outputs [data,class]
-            x = data[0].to(device)
-
-        row_size = min(5, args['Batch_Size'])
-
-        fig, ax = plt.subplots()
-        out = diffusion.forward_backward(ema, x, see_whole_sequence="half", t_distance=i)
-        imgs = [[ax.imshow(gridify_output(x, row_size), animated=True)] for x in out]
-        ani = animation.ArtistAnimation(
-                fig, imgs, interval=200, blit=True,
-                repeat_delay=1000
-                )
-
-        files = os.listdir(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/')
-        ani.save(f'{ROOT_DIR}diffusion-videos/ARGS={args["arg_num"]}/test-set/t={i}-attempts={len(files) + 1}.mp4')
-
-    for epoch in range(40 // args["Batch_Size"] + 5):
-        data = next(testing_dataset_loader)
-        if args["dataset"] != "cifar":
-            x = data["image"]
-            x = x.to(device)
-        else:
-            # cifar outputs [data,class]
-            x = data[0].to(device)
-
-        vlb_terms = diffusion.calc_total_vlb(x, model, args)
-        vlb.append(vlb_terms)
-
-    psnr = []
-    for epoch in range(40 // args["Batch_Size"] + 5):
-        data = next(testing_dataset_loader)
-        if args["dataset"] != "cifar":
-            x = data["image"]
-            x = x.to(device)
-        else:
-            # cifar outputs [data,class]
-            x = data[0].to(device)
-
-        out = diffusion.forward_backward(ema, x, see_whole_sequence=None, t_distance=args["T"] // 2)
-        psnr.append(evaluation.PSNR(out, x))
-
-    print(
-            f"Test set total VLB: {np.mean([i['total_vlb'].mean(dim=-1).cpu().item() for i in vlb])} +- {np.std([i['total_vlb'].mean(dim=-1).cpu().item() for i in vlb])}"
-            )
-    print(
-            f"Test set prior VLB: {np.mean([i['prior_vlb'].mean(dim=-1).cpu().item() for i in vlb])} +-"
-            f" {np.std([i['prior_vlb'].mean(dim=-1).cpu().item() for i in vlb])}"
-            )
-    print(
-            f"Test set vb: {np.mean([torch.mean(i['vb'], dim=-1).cpu().item() for i in vlb])} "
-            f"+- {np.std([torch.mean(i['vb'], dim=-1).cpu().item() for i in vlb])}"
-            )
-    print(
-            f"Test set x_0_mse: {np.mean([torch.mean(i['x_0_mse'], dim=-1).cpu().item() for i in vlb])} "
-            f"+- {np.std([torch.mean(i['x_0_mse'], dim=-1).cpu().item() for i in vlb])}"
-            )
-    print(
-            f"Test set mse: {np.mean([torch.mean(i['mse'], dim=-1).cpu().item() for i in vlb])}"
-            f" +- {np.std([torch.mean(i['mse'], dim=-1).cpu().item() for i in vlb])}"
-            )
-    print(f"Test set PSNR: {np.mean(psnr)} +- {np.std(psnr)}")
+    evaluation.testing(testing_dataset_loader, diffusion, ema=ema, args=args, model=model)
 
 
 def save(final, unet, optimiser, args, ema, loss=0, epoch=0):
