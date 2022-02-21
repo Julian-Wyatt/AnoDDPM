@@ -527,19 +527,18 @@ class GaussianDiffusionModel:
             # save image containing initial, each final denoised image, mean & mse
             output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *args["img_size"])
 
+            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}')
+
             dice = evaluation.heatmap(
                     real=x_0, recon=output_mean, mask=mask,
                     filename=f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/'
-                             f'{func_type}/heatmap-t'
-                             f'={t_distance}-{len(temp) + 1}.png'
+                             f'{func_type}/heatmap-t={t_distance}-{len(temp) + 1}.png'
                     )
 
             mse = ((output_mean - x_0).square() * 2) - 1
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
             out = torch.cat([x_0, output[:3], output_mean, mse, mse_threshold, mask])
-
-            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}')
 
             plt.imshow(gridify_output(out, 4), cmap='gray')
             plt.axis('off')
