@@ -173,7 +173,7 @@ def anomalous_validation():
             dice_data.append(
                     evaluation.heatmap(
                             img[slice_number, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
-                            img_mask[new["slices"][slice_number].numpy()[0], ...].reshape(1, 1, *args["img_size"]),
+                            img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]),
                             output_name + ".png"
                             )
                     )
@@ -184,7 +184,7 @@ def anomalous_validation():
                 dice = diff.detection_B(
                         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "gauss",
+                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), "gauss",
                         total_avg=3
                         )
                 dice_data.append(dice)
@@ -192,7 +192,7 @@ def anomalous_validation():
                 dice = diff.detection_B(
                         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave",
+                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), "octave",
                         total_avg=3
                         )
                 dice_data.append(dice)
@@ -200,12 +200,12 @@ def anomalous_validation():
                 diff.detection_A(
                         unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"])
+                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"])
                         )
                 dice = diff.detection_B(
                         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
-                        img_mask[new["slices"][slice].numpy()[0], ...].reshape(1, 1, *args["img_size"]), "octave",
+                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), "octave",
                         total_avg=3
                         )
                 dice_data.append(dice)
