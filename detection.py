@@ -1,7 +1,5 @@
-import json
-import os
 import random
-import sys
+import time
 
 # import matplotlib
 # matplotlib.use("TkAgg")
@@ -15,77 +13,6 @@ from GaussianDiffusion import GaussianDiffusionModel, get_beta_schedule
 from helpers import *
 from UNet import UNetModel
 
-DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
-def load_checkpoint(param, use_checkpoint):
-    """
-    loads the most recent (non-corrupted) checkpoint or the final model
-    :param param: args number
-    :param use_checkpoint: checkpointed or final model
-    :return:
-    """
-    if not use_checkpoint:
-        return torch.load(f'./model/diff-params-ARGS={param}/params-final.pt', map_location=device)
-    else:
-        checkpoints = os.listdir(f'./model/diff-params-ARGS={param}/checkpoint')
-        checkpoints.sort(reverse=True)
-        for i in checkpoints:
-            try:
-                file_dir = f"./model/diff-params-ARGS={param}/checkpoint/{i}"
-                loaded_model = torch.load(file_dir, map_location=device)
-                break
-            except RuntimeError:
-                continue
-        return loaded_model
-
-
-def load_parameters():
-    """
-    Loads the trained parameters for the detection model
-    :return:
-    """
-    if len(sys.argv[1:]) > 0:
-        params = sys.argv[1:]
-    else:
-        params = os.listdir("./model")
-    if ".DS_Store" in params:
-        params.remove(".DS_Store")
-
-    if params[0] == "CHECKPOINT":
-        use_checkpoint = True
-        params = params[1:]
-    else:
-        use_checkpoint = False
-
-    print(params)
-    for param in params:
-        if param.isnumeric():
-            output = load_checkpoint(param, use_checkpoint)
-        elif param[:4] == "args" and param[-5:] == ".json":
-            output = load_checkpoint(param[4:-5], use_checkpoint)
-        elif param[:4] == "args":
-            output = load_checkpoint(param[4:], use_checkpoint)
-        else:
-            raise ValueError(f"Unsupported input {param}")
-
-        if "args" in output:
-            args = output["args"]
-        else:
-            try:
-                with open(f'./test_args/args{param[17:]}.json', 'r') as f:
-                    args = json.load(f)
-                args['arg_num'] = param[17:]
-                args = defaultdict_from_json(args)
-            except FileNotFoundError:
-                raise ValueError(f"args{param[17:]} doesn't exist for {param}")
-
-        if "noise_fn" not in args:
-            args["noise_fn"] = "gauss"
-
-        return args, output
-
 
 def anomalous_validation():
     """
@@ -93,7 +20,7 @@ def anomalous_validation():
     the heatmap of that & detection method (A&B) or C
     :return:
     """
-    args, output = load_parameters()
+    args, output = load_parameters(device)
     print(f"args{args['arg_num']}")
     unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
 
@@ -107,11 +34,11 @@ def anomalous_validation():
     unet.load_state_dict(output["ema"])
     unet.to(device)
     unet.eval()
-    AnoDataset = dataset.AnomalousMRIDataset(
+    ano_dataset = dataset.AnomalousMRIDataset(
             ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
-            slice_selection="iterateKnown_restricted", resized=True
+            slice_selection="iterateKnown_restricted", resized=False
             )
-    loader = dataset.init_dataset_loader(AnoDataset, args)
+    loader = dataset.init_dataset_loader(ano_dataset, args)
     plt.rcParams['figure.dpi'] = 200
 
     try:
@@ -120,19 +47,34 @@ def anomalous_validation():
         pass
 
     # make folder for each anomalous volume
-    for i in AnoDataset.slices.keys():
+    for i in ano_dataset.slices.keys():
         try:
             os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{i}')
         except OSError:
             pass
 
     dice_data = []
-    for i in range(len(AnoDataset)):
+    start_time = time.time()
+    for i in range(len(ano_dataset)):
+
         new = next(loader)
         img = new["image"].to(device)
         img = img.reshape(img.shape[1], 1, *args["img_size"])
-        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], AnoDataset)
+        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
         img_mask = img_mask.to(device)
+
+        time_taken = time.time() - start_time
+        remaining_epochs = 22 - i
+        time_per_epoch = time_taken / (i + 1)
+        hours = remaining_epochs * time_per_epoch / 3600
+        mins = (hours % 1) * 60
+        hours = int(hours)
+
+        print(
+                f"file: {new['filenames'][0][-9:-4]}, "
+                f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+                f"remaining time: {hours}:{mins:02.0f}"
+                )
 
         for slice_number in range(4):
             try:
@@ -189,10 +131,17 @@ def anomalous_validation():
                         )
                 dice_data.append(dice)
             elif args["noise_fn"] == "simplex":
+                # dice = diff.detection_B(
+                #         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                #         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
+                #         img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), denoise_fn="octave",
+                #         total_avg=3
+                #         )
+                # dice_data.append(dice)
                 dice = diff.detection_B(
                         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
-                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), "octave",
+                        img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), denoise_fn="gauss",
                         total_avg=3
                         )
                 dice_data.append(dice)
@@ -216,4 +165,6 @@ def anomalous_validation():
 
 
 if __name__ == "__main__":
+    DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     anomalous_validation()
