@@ -8,15 +8,16 @@ def main():
     pass
 
 
-def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename):
+def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename, save=True):
     mse = ((recon - real).square() * 2) - 1
     mse_threshold = mse > 0
     mse_threshold = (mse_threshold.float() * 2) - 1
-    output = torch.cat((real, recon, mse, mse_threshold, mask))
-    plt.imshow(gridify_output(output, 5)[..., 0], cmap="gray")
-    plt.axis('off')
-    plt.savefig(filename)
-    plt.clf()
+    if save:
+        output = torch.cat((real, recon, mse, mse_threshold, mask))
+        plt.imshow(gridify_output(output, 5)[..., 0], cmap="gray")
+        plt.axis('off')
+        plt.savefig(filename)
+        plt.clf()
 
     dice = dice_coeff(real, recon, mse=mse, real_mask=mask)
     return dice.cpu().numpy()
