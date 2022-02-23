@@ -471,7 +471,7 @@ class AnomalousMRIDataset(Dataset):
         self.img_size = img_size
         self.resized = resized
         self.slices = {
-            "17904": range(160, 205), "18428": range(177, 213), "18582": range(160, 190), "18638": range(160, 212),
+            "17904": range(165, 205), "18428": range(177, 213), "18582": range(160, 190), "18638": range(160, 212),
             "18675": range(140, 200), "18716": range(135, 190), "18756": range(150, 205), "18863": range(130, 190),
             "18886": range(120, 180), "18975": range(170, 194), "19015": range(158, 195), "19085": range(155, 195),
             "19275": range(184, 213), "19277": range(158, 209), "19357": range(158, 210), "19398": range(164, 200),
