@@ -1,5 +1,4 @@
 # https://github.com/openai/guided-diffusion/tree/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924
-import os
 import random
 
 import matplotlib.pyplot as plt
@@ -122,6 +121,16 @@ def generate_simplex_noise(Simplex_instance, x, t, random_param=False, octave=6,
             ).repeat(x.shape[0], 1, 1, 1)
 
 
+def random_noise(Simplex_instance, x, t):
+    param = random.choice(
+            ["gauss", "simplex"]
+            )
+    if param == "gauss":
+        return torch.randn_like(x)
+    else:
+        return generate_simplex_noise(Simplex_instance, x, t)
+
+
 class GaussianDiffusionModel:
     def __init__(
             self,
@@ -135,6 +144,7 @@ class GaussianDiffusionModel:
         super().__init__()
         if noise == "gauss":
             self.noise_fn = lambda x, t: torch.randn_like(x)
+
         elif noise == "perlin":
             self.noise_fn = lambda x, t: torch.unsqueeze(
                     torch.from_numpy(
@@ -145,6 +155,8 @@ class GaussianDiffusionModel:
             self.simplex = Simplex_CLASS()
             if noise == "simplex_randParam":
                 self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, True)
+            elif noise == "random":
+                self.noise_fn = lambda x, t: random_noise(self.simplex, x, t)
             else:
                 self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False)
 
@@ -273,10 +285,15 @@ class GaussianDiffusionModel:
             "pred_x_0":     pred_x_0,
             }
 
-    def sample_p(self, model, x_t, t):
+    def sample_p(self, model, x_t, t, denoise_fn="gauss"):
         out = self.p_mean_variance(model, x_t, t)
         # noise = torch.randn_like(x_t)
-        noise = self.noise_fn(x_t, t).float()
+        if denoise_fn == "gauss":
+            noise = torch.randn_like(x_t)
+        elif denoise_fn == "noise_fn":
+            noise = self.noise_fn(x_t, t).float()
+        else:
+            noise = generate_simplex_noise(self.simplex, x_t, t, False).float()
 
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
@@ -284,7 +301,7 @@ class GaussianDiffusionModel:
         sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_x_0": out["pred_x_0"]}
 
-    def forward_backward(self, model, x, see_whole_sequence="half", t_distance=None):
+    def forward_backward(self, model, x, see_whole_sequence="half", t_distance=None, denoise_fn="gauss"):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
         if t_distance is None:
@@ -292,7 +309,7 @@ class GaussianDiffusionModel:
         seq = [x.cpu().detach()]
         if see_whole_sequence == "whole":
 
-            for t in range(1, int(t_distance)):
+            for t in range(int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 # noise = torch.randn_like(x)
                 noise = self.noise_fn(x, t_batch).float()
@@ -313,7 +330,7 @@ class GaussianDiffusionModel:
         for t in range(int(t_distance) - 1, -1, -1):
             t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
             with torch.no_grad():
-                out = self.sample_p(model, x, t_batch)
+                out = self.sample_p(model, x, t_batch, denoise_fn)
                 x = out["sample"]
             if see_whole_sequence:
                 seq.append(x.cpu().detach())
@@ -486,21 +503,21 @@ class GaussianDiffusionModel:
                         )
                 plt.clf()
 
-    def detection_B(self, model, x_0, args, file, mask, func_type="octave", total_avg=5):
+    def detection_B(self, model, x_0, args, file, mask, denoise_fn="gauss", total_avg=5):
         assert type(file) == tuple
         for i in [f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}",
                   f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}",
-                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/{func_type}"]:
+                  f"./diffusion-videos/ARGS={args['arg_num']}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}"]:
             try:
                 os.makedirs(i)
             except OSError:
                 pass
-        if func_type == "octave":
+        if denoise_fn == "octave":
             end = int(args["T"] * 0.6)
             self.noise_fn = lambda x, t: generate_simplex_noise(
                     self.simplex, x, t, False, frequency=64, octave=6,
                     persistence=0.8
-                    )
+                    ).float()
         else:
             end = int(args["T"] * 0.8)
             self.noise_fn = lambda x, t: torch.randn_like(x)
@@ -527,12 +544,12 @@ class GaussianDiffusionModel:
             # save image containing initial, each final denoised image, mean & mse
             output_mean = torch.mean(output, dim=[0]).reshape(1, 1, *args["img_size"])
 
-            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}')
+            temp = os.listdir(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}')
 
             dice = evaluation.heatmap(
                     real=x_0, recon=output_mean, mask=mask,
                     filename=f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/'
-                             f'{func_type}/heatmap-t={t_distance}-{len(temp) + 1}.png'
+                             f'{denoise_fn}/heatmap-t={t_distance}-{len(temp) + 1}.png'
                     )
 
             mse = ((output_mean - x_0).square() * 2) - 1
@@ -543,7 +560,7 @@ class GaussianDiffusionModel:
             plt.imshow(gridify_output(out, 4), cmap='gray')
             plt.axis('off')
             plt.savefig(
-                    f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{func_type}/t'
+                    f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{file[0]}/{file[1]}/{denoise_fn}/t'
                     f'={t_distance}-{len(temp) + 1}.png'
                     )
             plt.clf()
