@@ -568,6 +568,34 @@ class GaussianDiffusionModel:
             dice_coeff.append(dice)
         return dice_coeff
 
+    def detection_A_fixedT(self, model, x_0, args, mask, ):
+        t_distance = 250
+
+        output = torch.empty((35, 1, *args["img_size"]), device=x_0.device)
+        for i in range(7, 0, -1):
+            freq = 2 ** i
+            self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
+
+            t_tensor = torch.tensor([t_distance - 1], device=x_0.device).repeat(x_0.shape[0])
+            x = self.sample_q(
+                    x_0, t_tensor,
+                    self.noise_fn(x_0, t_tensor).float()
+                    )
+
+            for t in range(int(t_distance) - 1, -1, -1):
+                t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
+                with torch.no_grad():
+                    out = self.sample_p(model, x, t_batch)
+                    x = out["sample"]
+
+            mse = ((x - x_0).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+
+            output[i * 7:i * 7 + 7, ...] = torch.cat((x_0, x, mse, mse_threshold, mask))
+
+        return output
+
 
 x = """
 Two methods of detection:

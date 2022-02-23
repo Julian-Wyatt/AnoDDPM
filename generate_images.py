@@ -45,16 +45,17 @@ def output_denoise_sequence(sequence: list, filename, masks, predictions):
                     )
             # subplots[brain][noise].axis('off')
     for i in range(6):
-        subplots[0][i].set_xlabel(f"$x_{{{relevant_elements[i]}}}$", fontsize=5)
+
+        subplots[0][i].set_xlabel(f"$x_{{{relevant_elements[i]}}}$", fontsize=6)
         subplots[0][i].xaxis.set_label_position("top")
 
     for i in range(6, 11):
-        subplots[0][i].set_xlabel(f"$x_{{{relevant_elements_forward[::-1][1:][i - 6]}}}$", fontsize=5)
+        subplots[0][i].set_xlabel(f"$x_{{{relevant_elements_forward[::-1][1:][i - 6]}}}$", fontsize=6)
         subplots[0][i].xaxis.set_label_position("top")
 
-    subplots[0][-2].set_xlabel(f"Prediction", fontsize=5)
+    subplots[0][-2].set_xlabel(f"Prediction", fontsize=6)
     subplots[0][-2].xaxis.set_label_position("top")
-    subplots[0][-1].set_xlabel(f"Ground Truth", fontsize=5)
+    subplots[0][-1].set_xlabel(f"Ground Truth", fontsize=6)
     subplots[0][-1].xaxis.set_label_position("top")
 
     plt.savefig(filename)
@@ -82,17 +83,21 @@ def output_masked_comparison(sequence, filename):
             )
     for i, brain in enumerate(sequence):
         for plot in range(brain.shape[0]):
-            # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
-            subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
+            if plot == 3:
+                heatmap = np.random.choice([0, 1], p=[0.7, 0.3])
+                if heatmap == 1:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="hot")
+                else:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
+            else:
+                subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
             subplots[i][plot].tick_params(
                     top=False, bottom=False, left=False, right=False,
                     labelleft=False, labelbottom=False
                     )
 
-            # subplots[i][plot].axis('off')
-
     for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
-        subplots[0][i].set_xlabel(f"{val}", fontsize=5)
+        subplots[0][i].set_xlabel(f"{val}", fontsize=6)
         subplots[0][i].xaxis.set_label_position("top")
 
     plt.savefig(filename)
@@ -154,6 +159,7 @@ def make_all_outputs():
             output = diff.forward_backward(
                     unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
                     see_whole_sequence="whole",
+                    # t_distance=5, denoise_fn=args["noise_fn"]
                     t_distance=250, denoise_fn=args["noise_fn"]
                     )
 
@@ -178,7 +184,90 @@ def make_all_outputs():
                 sequences, f'./final-outputs/ARGS={args["arg_num"]}/attempt'
                            f'={len(temp) + 1}-sequence.png', masks, mse_thresholds
                 )
+        plt.close('all')
 
+
+def make_varying_frequency_outputs():
+    args, output = load_parameters(device)
+
+    unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
+
+    betas = get_beta_schedule(args['T'], args['beta_schedule'])
+
+    diff = GaussianDiffusionModel(
+            args['img_size'], betas, loss_weight=args['loss_weight'],
+            loss_type=args['loss-type'], noise=args["noise_fn"]
+            )
+
+    unet.load_state_dict(output["ema"])
+    unet.to(device)
+    unet.eval()
+    ano_dataset = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader = dataset.init_dataset_loader(ano_dataset, args)
+    plt.rcParams['figure.dpi'] = 1000
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    for i in range(20):
+
+        print(f"epoch {i}")
+
+        new = next(loader)
+        img = new["image"].to(device)
+        img = img.reshape(img.shape[1], 1, *args["img_size"])
+        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
+        img_mask = img_mask.to(device)
+
+        slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
+        output = diff.detection_A_fixedT(
+                unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args,
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                )
+
+        fig, subplots = plt.subplots(
+                7, 5, sharex=True, sharey=True, constrained_layout=False, figsize=(5, 7),
+                gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
+                )
+
+        tempplot = fig.add_subplot(111, frameon=False)
+
+        for freq in range(7):
+            for out_img in range(5):
+                # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
+                subplots[freq][out_img].imshow(
+                        output[7 * freq + out_img].reshape(*output[0].shape[-2:]).cpu().numpy(),
+                        cmap="gray"
+                        )
+                subplots[freq][out_img].tick_params(
+                        top=False, bottom=False, left=False, right=False,
+                        labelleft=False, labelbottom=False
+                        )
+
+        for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+            subplots[0][i].set_xlabel(f"{val}", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        for i in range(7):
+            subplots[i][0].set_ylabel(f"$2^{i + 1}={2 ** (i + 1)}$", fontsize=6)
+            subplots[i][0].yaxis.set_label_position("left")
+
+        plt.tick_params(labelcolor='none', which='both', top=False, left=False, bottom=False, right=False)
+        plt.ylabel("Starting Frequency\n", fontsize=6)
+
+        temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
+
+        plt.savefig(
+                f'./final-outputs/ARGS={args["arg_num"]}/attempt={len(temp) + 1}-{new["filenames"][0][-9:-4]}-frequency.png'
+                )
+        plt.close('all')
 
 
 
@@ -193,7 +282,9 @@ if __name__ == '__main__':
     import os
 
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+    plt.rcParams["font.family"] = "Times New Roman"
 
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
     make_all_outputs()
