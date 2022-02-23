@@ -19,7 +19,7 @@ def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename):
     plt.clf()
 
     dice = dice_coeff(real, recon, mse=mse, real_mask=mask)
-    return dice
+    return dice.cpu().numpy()
 
 
 # for anomalous dataset - metric of crossover
@@ -37,6 +37,7 @@ def PSNR(recon, real):
     mse = torch.mean(se, dim=list(range(len(real.shape))))
     psnr = 20 * torch.log10(torch.max(real) / torch.sqrt(mse))
     return psnr.detach().cpu().numpy()
+
 
 
 def FID():
@@ -147,7 +148,7 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
 
 
 def main():
-    args, output = load_parameters()
+    args, output = load_parameters(device)
     print(f"args{args['arg_num']}")
 
     in_channels = 3 if args["dataset"].lower() == "cifar" else 1
@@ -172,7 +173,7 @@ def main():
     unet.load_state_dict(output["model_state_dict"])
     unet.to(device)
     unet.eval()
-    training_dataset, testing_dataset = dataset.init_datasets("./", args)
+    _, testing_dataset = dataset.init_datasets("./", args)
     testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
 
     testing(testing_dataset_loader, diff, args, ema, unet)
