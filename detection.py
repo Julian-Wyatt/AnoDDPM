@@ -79,7 +79,7 @@ def anomalous_validation_1():
             output = diff.forward_backward(
                     unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                     see_whole_sequence="whole",
-                    t_distance=timestep
+                    t_distance=timestep, denoise_fn=args["noise_fn"]
                     )
 
             fig, ax = plt.subplots()
@@ -118,13 +118,6 @@ def anomalous_validation_1():
                         )
                 dice_data.append(dice)
             elif args["noise_fn"] == "simplex":
-                # dice = diff.detection_B(
-                #         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
-                #         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
-                #         img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]), denoise_fn="octave",
-                #         total_avg=3
-                #         )
-                # dice_data.append(dice)
                 dice = diff.detection_B(
                         unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
                         args, (new["filenames"][0][-9:-4], new["slices"][slice_number].numpy()[0]),
@@ -157,8 +150,6 @@ def anomalous_validation_1():
                 f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
                 f"remaining time: {hours}:{mins:02.0f}"
                 )
-
-    print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
 
 
 def anomalous_dice_calculation():
@@ -201,6 +192,7 @@ def anomalous_dice_calculation():
             pass
 
     dice_data = []
+    ssim_data = []
     start_time = time.time()
     for i in range(len(ano_dataset)):
 
@@ -228,7 +220,12 @@ def anomalous_dice_calculation():
                     evaluation.heatmap(
                             img[slice_number, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
                             img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]),
-                            "x.png", save=False
+                            f"{new['filenames'][0][-9:-4]}-{new['slices'][slice_number]}.png", save=True
+                            )
+                    )
+            ssim_data.append(
+                    evaluation.SSIM(
+                            img[slice_number, ...].reshape(*args["img_size"]), output[-1].reshape(*args["img_size"])
                             )
                     )
 
@@ -244,10 +241,15 @@ def anomalous_dice_calculation():
         print(
                 f"file: {new['filenames'][0][-9:-4]}, "
                 f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
-                f"remaining time: {hours}:{mins:02.0f}"
+                f"remaining time: {hours}:{mins:02.0f}, dice {np.mean(dice_data)} +- {np.std(dice_data)}, ssim {np.mean(ssim_data)} +-"
+                f" {np.std(ssim_data)}"
                 )
 
     print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
+    print(
+            f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
+            f" {np.std(ssim_data)}"
+            )
 
 
 
@@ -256,3 +258,4 @@ if __name__ == "__main__":
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     anomalous_dice_calculation()
+    # anomalous_validation_1()
