@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import torch
+from skimage.metrics import structural_similarity as ssim
 
 from helpers import gridify_output
 
@@ -13,20 +14,26 @@ def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename, save=True):
     mse_threshold = mse > 0
     mse_threshold = (mse_threshold.float() * 2) - 1
     if save:
-        output = torch.cat((real, recon, mse, mse_threshold, mask))
+        output = torch.cat((real, recon.reshape(1, *recon.shape), mse, mse_threshold, mask))
         plt.imshow(gridify_output(output, 5)[..., 0], cmap="gray")
         plt.axis('off')
         plt.savefig(filename)
         plt.clf()
 
-    dice = dice_coeff(real, recon, mse=mse, real_mask=mask)
+    dice = dice_coeff(real, recon, real_mask=mask)
     return dice.cpu().numpy()
 
 
 # for anomalous dataset - metric of crossover
-def dice_coeff(real: torch.Tensor, recon: torch.Tensor, real_mask: torch.Tensor, mse=None, smooth=1):
-    if mse == None:
-        mse = ((real - recon).square() * 2) - 1
+def dice_coeff(real: torch.Tensor, recon: torch.Tensor, real_mask: torch.Tensor, smooth=1):
+    scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+    real = scale_img(real.clone().detach())
+    recon = scale_img(recon.clone().detach())
+    real_mask = scale_img(real_mask.clone().detach())
+
+    mse = ((real - recon).square() * 2) - 1
+    mse = mse > 0
+    mse = (mse.float() * 2) - 1
     intersection = torch.sum(mse * real_mask, dim=[1, 2, 3])
     union = torch.sum(mse, dim=[1, 2, 3]) + torch.sum(real_mask, dim=[1, 2, 3])
     dice = torch.mean((2. * intersection + smooth) / (union + smooth), dim=0)
@@ -39,6 +46,9 @@ def PSNR(recon, real):
     psnr = 20 * torch.log10(torch.max(real) / torch.sqrt(mse))
     return psnr.detach().cpu().numpy()
 
+
+def SSIM(real, recon):
+    return ssim(real.cpu().numpy(), recon.cpu().numpy())
 
 
 def FID():
@@ -67,7 +77,7 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
                 mse -> T     mu +- sigma,
                 PSNR         mu +- sigma
     """
-
+    import os
     try:
         os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/test-set/')
     except OSError:
