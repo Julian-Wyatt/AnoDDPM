@@ -288,12 +288,18 @@ class GaussianDiffusionModel:
     def sample_p(self, model, x_t, t, denoise_fn="gauss"):
         out = self.p_mean_variance(model, x_t, t)
         # noise = torch.randn_like(x_t)
-        if denoise_fn == "gauss":
-            noise = torch.randn_like(x_t)
-        elif denoise_fn == "noise_fn":
-            noise = self.noise_fn(x_t, t).float()
+        if type(denoise_fn) == str:
+            if denoise_fn == "gauss":
+                noise = torch.randn_like(x_t)
+            elif denoise_fn == "noise_fn":
+                noise = self.noise_fn(x_t, t).float()
+            elif denoise_fn == "random":
+                # noise = random_noise(self.simplex, x_t, t).float()
+                noise = torch.randn_like(x_t)
+            else:
+                noise = generate_simplex_noise(self.simplex, x_t, t, False).float()
         else:
-            noise = generate_simplex_noise(self.simplex, x_t, t, False).float()
+            noise = denoise_fn(x_t, t)
 
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x_t.shape) - 1)))
@@ -301,7 +307,10 @@ class GaussianDiffusionModel:
         sample = out["mean"] + nonzero_mask * torch.exp(0.5 * out["log_variance"]) * noise
         return {"sample": sample, "pred_x_0": out["pred_x_0"]}
 
-    def forward_backward(self, model, x, see_whole_sequence="half", t_distance=None, denoise_fn="gauss"):
+    def forward_backward(
+            self, model, x, see_whole_sequence="half", t_distance=None, denoise_fn="gauss",
+            noise_fn=None
+            ):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
         if t_distance is None:
@@ -312,7 +321,10 @@ class GaussianDiffusionModel:
             for t in range(int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 # noise = torch.randn_like(x)
-                noise = self.noise_fn(x, t_batch).float()
+                if noise_fn == "octave":
+                    noise = generate_simplex_noise(self.simplex, x, t_batch, False).float()
+                else:
+                    noise = self.noise_fn(x, t_batch).float()
                 with torch.no_grad():
                     x = self.sample_q_gradual(x, t_batch, noise)
 
@@ -568,31 +580,33 @@ class GaussianDiffusionModel:
             dice_coeff.append(dice)
         return dice_coeff
 
-    def detection_A_fixedT(self, model, x_0, args, mask, ):
+    def detection_A_fixedT(self, model, x_0, args, mask, end_freq=6):
         t_distance = 250
 
-        output = torch.empty((35, 1, *args["img_size"]), device=x_0.device)
-        for i in range(7, 0, -1):
+        output = torch.empty((6 * end_freq, 1, *args["img_size"]), device=x_0.device)
+        for i in range(1, end_freq + 1):
+
             freq = 2 ** i
-            self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
+            noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq).float()
 
             t_tensor = torch.tensor([t_distance - 1], device=x_0.device).repeat(x_0.shape[0])
             x = self.sample_q(
                     x_0, t_tensor,
-                    self.noise_fn(x_0, t_tensor).float()
+                    noise_fn(x_0, t_tensor).float()
                     )
-
+            x_noised = x.clone().detach()
             for t in range(int(t_distance) - 1, -1, -1):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 with torch.no_grad():
-                    out = self.sample_p(model, x, t_batch)
+                    out = self.sample_p(model, x, t_batch, denoise_fn=noise_fn)
                     x = out["sample"]
 
-            mse = ((x - x_0).square() * 2) - 1
+            mse = ((x_0 - x).square() * 2) - 1
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
 
-            output[i * 7:i * 7 + 7, ...] = torch.cat((x_0, x, mse, mse_threshold, mask))
+            # print((i - 1) * 6, i * 6)
+            output[(i - 1) * 6:i * 6, ...] = torch.cat((x_0, x_noised, x, mse, mse_threshold, mask))
 
         return output
 
