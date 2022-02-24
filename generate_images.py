@@ -73,7 +73,7 @@ def output_masked_comparison(sequence, filename):
         sequence = [sequence]
 
     fig, subplots = plt.subplots(
-            len(sequence), 5, sharex=True, sharey=True, constrained_layout=False, figsize=(5, len(sequence)),
+            len(sequence), 6, sharex=True, sharey=True, constrained_layout=False, figsize=(6, len(sequence)),
             squeeze=False,
             gridspec_kw={'wspace': 0, 'hspace': 0}
             )
@@ -84,11 +84,8 @@ def output_masked_comparison(sequence, filename):
     for i, brain in enumerate(sequence):
         for plot in range(brain.shape[0]):
             if plot == 3:
-                heatmap = np.random.choice([0, 1], p=[0.7, 0.3])
-                if heatmap == 1:
-                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="hot")
-                else:
-                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
+                subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="hot")
+
             else:
                 subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
             subplots[i][plot].tick_params(
@@ -96,18 +93,18 @@ def output_masked_comparison(sequence, filename):
                     labelleft=False, labelbottom=False
                     )
 
-    for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+    for i, val in enumerate(["$x_0$", "$x_{250}$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
         subplots[0][i].set_xlabel(f"{val}", fontsize=6)
         subplots[0][i].xaxis.set_label_position("top")
 
     plt.savefig(filename)
 
 
-def make_prediction(real, recon, mask):
+def make_prediction(real, recon, mask, x_t):
     mse = ((recon - real).square() * 2) - 1
     mse_threshold = mse > 0
     mse_threshold = (mse_threshold.float() * 2) - 1
-    return torch.cat((real, recon, mse, mse_threshold, mask)), mse_threshold
+    return torch.cat((real, x_t, recon, mse, mse_threshold, mask)), mse_threshold
 
 
 def make_all_outputs():
@@ -132,6 +129,11 @@ def make_all_outputs():
 
     loader = dataset.init_dataset_loader(ano_dataset, args)
     plt.rcParams['figure.dpi'] = 1000
+
+    if args["noise_fn"] == "gauss":
+        t_distance = 500
+    else:
+        t_distance = 250
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
         try:
@@ -160,12 +162,12 @@ def make_all_outputs():
                     unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
                     see_whole_sequence="whole",
                     # t_distance=5, denoise_fn=args["noise_fn"]
-                    t_distance=250, denoise_fn=args["noise_fn"]
+                    t_distance=t_distance, denoise_fn=args["noise_fn"]
                     )
 
             output_images, mse_threshold = make_prediction(
                     img[slice, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device),
-                    img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                    img_mask[slice, ...].reshape(1, 1, *args["img_size"]), output[t_distance // 2].to(device)
                     )
             predictions.append(
                     output_images
@@ -216,7 +218,7 @@ def make_varying_frequency_outputs():
         except OSError:
             pass
 
-    for i in range(20):
+    for i in range(22):
 
         print(f"epoch {i}")
 
@@ -233,29 +235,35 @@ def make_varying_frequency_outputs():
                 )
 
         fig, subplots = plt.subplots(
-                7, 5, sharex=True, sharey=True, constrained_layout=False, figsize=(5, 7),
+                6, 6, sharex=True, sharey=True, constrained_layout=False, figsize=(6, 6),
                 gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
                 )
 
         tempplot = fig.add_subplot(111, frameon=False)
 
-        for freq in range(7):
-            for out_img in range(5):
-                # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
-                subplots[freq][out_img].imshow(
-                        output[7 * freq + out_img].reshape(*output[0].shape[-2:]).cpu().numpy(),
-                        cmap="gray"
-                        )
+        for freq in range(6):
+            for out_img in range(6):
+                if out_img == 3:
+                    subplots[freq][out_img].imshow(
+                            output[6 * freq + out_img].reshape(*output.shape[-2:]).cpu().numpy(),
+                            cmap="hot"
+                            )
+                else:
+                    # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
+                    subplots[freq][out_img].imshow(
+                            output[6 * freq + out_img].reshape(*output.shape[-2:]).cpu().numpy(),
+                            cmap="gray"
+                            )
                 subplots[freq][out_img].tick_params(
                         top=False, bottom=False, left=False, right=False,
                         labelleft=False, labelbottom=False
                         )
 
-        for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+        for i, val in enumerate(["$x_0$", "$x_{250}$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
             subplots[0][i].set_xlabel(f"{val}", fontsize=6)
             subplots[0][i].xaxis.set_label_position("top")
 
-        for i in range(7):
+        for i in range(6):
             subplots[i][0].set_ylabel(f"$2^{i + 1}={2 ** (i + 1)}$", fontsize=6)
             subplots[i][0].yaxis.set_label_position("left")
 
@@ -265,14 +273,150 @@ def make_varying_frequency_outputs():
         temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
 
         plt.savefig(
-                f'./final-outputs/ARGS={args["arg_num"]}/attempt={len(temp) + 1}-{new["filenames"][0][-9:-4]}-frequency.png'
+                f'./final-outputs/ARGS={args["arg_num"]}/{new["filenames"][0][-9:-4]}-frequency-attempt'
+                f'={len(temp) + 1}.png'
                 )
+        plt.close('all')
+
+
+def gauss_varyingT_outputs():
+    args, output = load_parameters(device)
+
+    unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
+
+    betas = get_beta_schedule(args['T'], args['beta_schedule'])
+
+    diff = GaussianDiffusionModel(
+            args['img_size'], betas, loss_weight=args['loss_weight'],
+            loss_type=args['loss-type'], noise=args["noise_fn"]
+            )
+
+    unet.load_state_dict(output["ema"])
+    unet.to(device)
+    unet.eval()
+    ano_dataset = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader = dataset.init_dataset_loader(ano_dataset, args)
+    plt.rcParams['figure.dpi'] = 1000
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    for i in range(20):
+
+
+        print(f"epoch {i}")
+
+        new = next(loader)
+        img = new["image"].to(device)
+        img = img.reshape(img.shape[1], 1, *args["img_size"])
+        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
+        img_mask = img_mask.to(device)
+
+        slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
+
+        output_250 = diff.forward_backward(
+                unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                see_whole_sequence="whole",
+                # t_distance=5, denoise_fn=args["noise_fn"]
+                t_distance=250, denoise_fn=args["noise_fn"]
+                )
+
+        output_250_images, mse_threshold_250 = make_prediction(
+                img[slice, ...].reshape(1, 1, *args["img_size"]), output_250[-1].to(device),
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                )
+
+        output_500 = diff.forward_backward(
+                unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                see_whole_sequence="whole",
+                # t_distance=5, denoise_fn=args["noise_fn"]
+                t_distance=500, denoise_fn=args["noise_fn"]
+                )
+
+        output_500_images, mse_threshold_500 = make_prediction(
+                img[slice, ...].reshape(1, 1, *args["img_size"]), output_500[-1].to(device),
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                )
+
+        output_750 = diff.forward_backward(
+                unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
+                see_whole_sequence="whole",
+                # t_distance=5, denoise_fn=args["noise_fn"]
+                t_distance=750, denoise_fn=args["noise_fn"]
+                )
+
+        output_750_images, mse_threshold_750 = make_prediction(
+                img[slice, ...].reshape(1, 1, *args["img_size"]), output_750[-1].to(device),
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                )
+
+        # x_0,x_t,\hat{x}_0,se,se_threshold,ground truth
+
+        temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
+
+        fig, subplots = plt.subplots(
+                3, 6, sharex=True, sharey=True, constrained_layout=False, figsize=(6, 3),
+                squeeze=False,
+                gridspec_kw={'wspace': 0, 'hspace': 0}
+                )
+        tempplot = fig.add_subplot(111, frameon=False)
+
+        for i in range(3):
+            subplots[i][0].imshow(img[slice, ...].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+
+        subplots[0][1].imshow(output_250[251 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[0][2].imshow(output_250[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[0][3].imshow(output_250_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[0][4].imshow(output_250_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[0][5].imshow(output_250_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+
+        subplots[1][1].imshow(output_500[501 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[1][2].imshow(output_500[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[1][3].imshow(output_500_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[1][4].imshow(output_500_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[1][5].imshow(output_500_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+
+        subplots[2][1].imshow(output_750[751 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[2][2].imshow(output_750[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[2][3].imshow(output_750_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[2][4].imshow(output_750_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[2][5].imshow(output_750_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+
+        for i in range(3):
+            for j in range(6):
+                subplots[i][j].tick_params(
+                        top=False, bottom=False, left=False, right=False,
+                        labelleft=False, labelbottom=False
+                        )
+
+        for i, val in enumerate(["$x_0$", "$x_t$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+            subplots[0][i].set_xlabel(f"{val}", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        for i, val in enumerate([250, 500, 750]):
+            subplots[i][0].set_ylabel(f"$x_{{{val}}}$", fontsize=6)
+            subplots[i][0].yaxis.set_label_position("left")
+        plt.tick_params(labelcolor='none', which='both', top=False, left=False, bottom=False, right=False)
+
+        plt.savefig(
+                f'./final-outputs/ARGS={args["arg_num"]}/{new["filenames"][0][-9:-4]}-Gauss-attempt'
+                f'={len(temp) + 1}.png'
+                )
+
         plt.close('all')
 
 
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+    from matplotlib import font_manager
     import torch
     import numpy as np
 
@@ -282,9 +426,22 @@ if __name__ == '__main__':
     import os
 
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-    plt.rcParams["font.family"] = "Times New Roman"
+
+    # font_files = font_manager.findSystemFonts(fontpaths="./")
+    # for font_file in font_files:
+    #     font_manager.fontManager.addfont(font_file)
+    # plt.rcParams["font.family"] = "Times New Roman"
+
+    font_path = "./times new roman.ttf"
+    font_manager.fontManager.addfont(font_path)
+    prop = font_manager.FontProperties(fname=font_path)
+
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = prop.get_name()
 
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     make_all_outputs()
+    # make_varying_frequency_outputs()
+    # gauss_varyingT_outputs()
