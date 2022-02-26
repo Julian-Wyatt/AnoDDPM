@@ -313,6 +313,9 @@ class GaussianDiffusionModel:
             ):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
+        if t_distance == 0:
+            return x.detach()
+
         if t_distance is None:
             t_distance = self.num_timesteps
         seq = [x.cpu().detach()]

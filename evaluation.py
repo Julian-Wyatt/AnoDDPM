@@ -20,20 +20,17 @@ def heatmap(real: torch.Tensor, recon: torch.Tensor, mask, filename, save=True):
         plt.savefig(filename)
         plt.clf()
 
-    dice = dice_coeff(real, recon, real_mask=mask)
-    return dice.cpu().numpy()
-
 
 # for anomalous dataset - metric of crossover
-def dice_coeff(real: torch.Tensor, recon: torch.Tensor, real_mask: torch.Tensor, smooth=1):
-    scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
-    real = scale_img(real.clone().detach())
-    recon = scale_img(recon.clone().detach())
-    real_mask = scale_img(real_mask.clone().detach())
+def dice_coeff(real: torch.Tensor, recon: torch.Tensor, real_mask: torch.Tensor, smooth=0.000001, mse=None):
+    # scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
+    # real = scale_img(real.clone().detach())
+    # recon = scale_img(recon.clone().detach())
+    # real_mask = scale_img(real_mask.clone().detach())
+    if mse == None:
+        mse = (real - recon).square()
+        mse = (mse > 0.5).float()
 
-    mse = ((real - recon).square() * 2) - 1
-    mse = mse > 0
-    mse = (mse.float() * 2) - 1
     intersection = torch.sum(mse * real_mask, dim=[1, 2, 3])
     union = torch.sum(mse, dim=[1, 2, 3]) + torch.sum(real_mask, dim=[1, 2, 3])
     dice = torch.mean((2. * intersection + smooth) / (union + smooth), dim=0)
@@ -49,6 +46,28 @@ def PSNR(recon, real):
 
 def SSIM(real, recon):
     return ssim(real.cpu().numpy(), recon.cpu().numpy())
+
+
+def IoU(real, recon):
+    import numpy as np
+    real = real.cpu().numpy()
+    recon = recon.cpu().numpy()
+    intersection = np.logical_and(real, recon)
+    union = np.logical_or(real, recon)
+    return np.sum(intersection) / np.sum(union)
+
+
+def precision(real_mask, recon_mask):
+    TP = ((real_mask == 1) & (recon_mask == 1))
+    FP = ((real_mask == 1) & (recon_mask == 0))
+    return torch.sum(TP).float() / ((torch.sum(TP) + torch.sum(FP)).float() + 1e-6)
+
+
+
+def recall(real_mask, recon_mask):
+    TP = ((real_mask == 1) & (recon_mask == 1))
+    FN = ((real_mask == 0) & (recon_mask == 1))
+    return torch.sum(TP).float() / ((torch.sum(TP) + torch.sum(FN)).float() + 1e-6)
 
 
 def FID():
