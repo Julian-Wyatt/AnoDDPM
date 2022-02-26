@@ -330,7 +330,7 @@ def gauss_varyingT_outputs():
 
         output_250_images, mse_threshold_250 = make_prediction(
                 img[slice, ...].reshape(1, 1, *args["img_size"]), output_250[-1].to(device),
-                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"]), output_250[251 // 2].to(device)
                 )
 
         output_500 = diff.forward_backward(
@@ -342,7 +342,7 @@ def gauss_varyingT_outputs():
 
         output_500_images, mse_threshold_500 = make_prediction(
                 img[slice, ...].reshape(1, 1, *args["img_size"]), output_500[-1].to(device),
-                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"]), output_500[501 // 2].to(device)
                 )
 
         output_750 = diff.forward_backward(
@@ -354,7 +354,7 @@ def gauss_varyingT_outputs():
 
         output_750_images, mse_threshold_750 = make_prediction(
                 img[slice, ...].reshape(1, 1, *args["img_size"]), output_750[-1].to(device),
-                img_mask[slice, ...].reshape(1, 1, *args["img_size"])
+                img_mask[slice, ...].reshape(1, 1, *args["img_size"]), output_750[751 // 2].to(device)
                 )
 
         # x_0,x_t,\hat{x}_0,se,se_threshold,ground truth
@@ -413,6 +413,91 @@ def gauss_varyingT_outputs():
         plt.close('all')
 
 
+def make_unet_outputs():
+    args, output = load_parameters(device)
+
+    unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
+
+    unet.load_state_dict(output["ema"])
+    unet.to(device)
+    unet.eval()
+    ano_dataset = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader = dataset.init_dataset_loader(ano_dataset, args)
+    plt.rcParams['figure.dpi'] = 1000
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    for i in range(22):
+
+        predictions = []
+
+        rows = np.random.choice([1, 2, 3, 4, 5, 8], p=[0.3, 0.2, 0.1, 0.2, 0.15, 0.05])
+        print(f"epoch {i}, rows @ epoch: {rows}")
+        for k in range(rows):
+            new = next(loader)
+            img = new["image"].to(device)
+            img = img.reshape(img.shape[1], 1, *args["img_size"])
+            img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
+            img_mask = img_mask.to(device)
+
+            slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
+
+            t_batch = torch.tensor([1], device=img.device).repeat(img.shape[0])
+            output = unet(img[slice, ...].reshape(1, 1, *args["img_size"]), t_batch)
+
+            mse = ((output[-1].to(device) - img[slice, ...].reshape(1, 1, *args["img_size"])).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+            pred = torch.cat(
+                    (img[slice, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device), mse, mse_threshold,
+                     img_mask[slice, ...].reshape(1, 1, *args["img_size"]))
+                    )
+
+            predictions.append(pred)
+
+        temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
+
+        fig, subplots = plt.subplots(
+                len(predictions), 5, sharex=True, sharey=True, constrained_layout=False, figsize=(5, len(predictions)),
+                squeeze=False,
+                gridspec_kw={'wspace': 0, 'hspace': 0}
+                )
+        plt.tick_params(
+                top=False, bottom=False, left=False, right=False,
+                labelleft=False, labelbottom=False
+                )
+        for i, brain in enumerate(predictions):
+            for plot in range(brain.shape[0]):
+                if plot == 2:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="hot")
+
+                else:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
+                subplots[i][plot].tick_params(
+                        top=False, bottom=False, left=False, right=False,
+                        labelleft=False, labelbottom=False
+                        )
+
+        for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+            subplots[0][i].set_xlabel(f"{val}", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        plt.savefig(
+                f'./final-outputs/ARGS={args["arg_num"]}/attempt'
+                f'={len(temp) + 1}-predictions.png'
+                )
+
+        plt.close('all')
+
+
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
@@ -442,6 +527,6 @@ if __name__ == '__main__':
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    make_all_outputs()
+    # make_all_outputs()
     # make_varying_frequency_outputs()
-    # gauss_varyingT_outputs()
+    gauss_varyingT_outputs()
