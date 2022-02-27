@@ -243,7 +243,7 @@ def testing(testing_dataset_loader, args, ema, model):
         t_batch = torch.tensor([1], device=x.device).repeat(x.shape[0])
         x_hat = ema(x, t_batch)
 
-        training_outputs(x, x_hat, epoch * 50, ema=ema, args=args, row_size=4, filename=f"training-epoch={epoch}")
+        training_outputs(x, x_hat, epoch * 50, ema=ema, args=args, row_size=4, filename=f"testing-epoch={epoch}")
 
         psnr.append(evaluation.PSNR(x_hat, x))
     print(f"Test set PSNR: {np.mean(psnr)} +- {np.std(psnr)}")
@@ -266,7 +266,7 @@ def main():
         "EPOCHS":            3000,
         "base_channels":     128,
         "channel_mults":     "",
-        "Batch_Size":        2,
+        "Batch_Size":        1,
         "arg_num":           100,
         "dataset":           "mri",
         "num_heads":         2,

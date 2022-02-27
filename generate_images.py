@@ -415,7 +415,7 @@ def gauss_varyingT_outputs():
 
 def make_unet_outputs():
     args, output = load_parameters(device)
-
+    args["Batch_Size"] = 1
     unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
 
     unet.load_state_dict(output["ema"])
@@ -526,7 +526,14 @@ if __name__ == '__main__':
 
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    import sys
 
-    # make_all_outputs()
-    # make_varying_frequency_outputs()
-    gauss_varyingT_outputs()
+    if str(sys.argv[1]) == "100":
+        make_unet_outputs()
+    elif str(sys.argv[1]) == "23":
+        make_varying_frequency_outputs()
+    elif str(sys.argv[1]) == "26":
+        gauss_varyingT_outputs()
+        make_all_outputs()
+    else:
+        make_all_outputs()

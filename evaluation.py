@@ -70,6 +70,12 @@ def recall(real_mask, recon_mask):
     return torch.sum(TP).float() / ((torch.sum(TP) + torch.sum(FN)).float() + 1e-6)
 
 
+def FPR(real_mask, recon_mask):
+    FP = ((real_mask == 1) & (recon_mask == 0))
+    TN = ((real_mask == 0) & (recon_mask == 0))
+    return torch.sum(FP).float() / ((torch.sum(FP) + torch.sum(TN)).float() + 1e-6)
+
+
 def FID():
     pass
 
