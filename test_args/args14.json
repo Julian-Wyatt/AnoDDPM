@@ -21,6 +21,5 @@
   "dropout": 0,
   "attention_resolutions": "32,16,8",
   "num_heads": 4,
-  "num_head_channels": -1,
-  "noise_fn": "gauss"
+  "num_head_channels": -1
 }

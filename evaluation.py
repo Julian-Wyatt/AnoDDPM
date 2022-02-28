@@ -30,7 +30,6 @@ def dice_coeff(real: torch.Tensor, recon: torch.Tensor, real_mask: torch.Tensor,
     if mse == None:
         mse = (real - recon).square()
         mse = (mse > 0.5).float()
-
     intersection = torch.sum(mse * real_mask, dim=[1, 2, 3])
     union = torch.sum(mse, dim=[1, 2, 3]) + torch.sum(real_mask, dim=[1, 2, 3])
     dice = torch.mean((2. * intersection + smooth) / (union + smooth), dim=0)
@@ -45,7 +44,7 @@ def PSNR(recon, real):
 
 
 def SSIM(real, recon):
-    return ssim(real.cpu().numpy(), recon.cpu().numpy())
+    return ssim(real.detach().cpu().numpy(), recon.detach().cpu().numpy())
 
 
 def IoU(real, recon):

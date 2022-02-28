@@ -130,17 +130,13 @@ def make_all_outputs():
     loader = dataset.init_dataset_loader(ano_dataset, args)
     plt.rcParams['figure.dpi'] = 1000
 
-    if args["noise_fn"] == "gauss":
-        t_distance = 500
-    else:
-        t_distance = 250
-
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
         try:
             os.makedirs(i)
         except OSError:
             pass
 
+    t_distance = 250
     for i in range(20):
 
         predictions = []
@@ -439,29 +435,32 @@ def make_unet_outputs():
 
         predictions = []
 
-        rows = np.random.choice([1, 2, 3, 4, 5, 8], p=[0.3, 0.2, 0.1, 0.2, 0.15, 0.05])
+        rows = np.random.choice([1, 2, 3, 4, 5, 8], p=[0.3, 0.3, 0.1, 0.1, 0.15, 0.05])
         print(f"epoch {i}, rows @ epoch: {rows}")
         for k in range(rows):
             new = next(loader)
-            img = new["image"].to(device)
+            img = new["image"]
             img = img.reshape(img.shape[1], 1, *args["img_size"])
             img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
-            img_mask = img_mask.to(device)
 
             slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
 
-            t_batch = torch.tensor([1], device=img.device).repeat(img.shape[0])
-            output = unet(img[slice, ...].reshape(1, 1, *args["img_size"]), t_batch)
+            img_mask = img_mask[slice, ...].reshape(1, 1, *args["img_size"]).to(device)
+            img = img[slice, ...].reshape(1, 1, *args["img_size"]).to(device)
 
-            mse = ((output[-1].to(device) - img[slice, ...].reshape(1, 1, *args["img_size"])).square() * 2) - 1
+            t_batch = torch.tensor([1], device=img.device).repeat(img.shape[0])
+            output = unet(img, t_batch)
+            out = output[-1].to(device)
+            mse = ((out - img).square() * 2) - 1
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
+
             pred = torch.cat(
-                    (img[slice, ...].reshape(1, 1, *args["img_size"]), output[-1].to(device), mse, mse_threshold,
-                     img_mask[slice, ...].reshape(1, 1, *args["img_size"]))
+                    (img, out.reshape(1, 1, *args["img_size"]), mse, mse_threshold,
+                     img_mask)
                     )
 
-            predictions.append(pred)
+            predictions.append(pred.cpu())
 
         temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
 
@@ -477,10 +476,108 @@ def make_unet_outputs():
         for i, brain in enumerate(predictions):
             for plot in range(brain.shape[0]):
                 if plot == 2:
-                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="hot")
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).detach().cpu().numpy(), cmap="hot")
 
                 else:
-                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).cpu().numpy(), cmap="gray")
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).detach().cpu().numpy(), cmap="gray")
+                subplots[i][plot].tick_params(
+                        top=False, bottom=False, left=False, right=False,
+                        labelleft=False, labelbottom=False
+                        )
+
+        for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+            subplots[0][i].set_xlabel(f"{val}", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        plt.savefig(
+                f'./final-outputs/ARGS={args["arg_num"]}/attempt'
+                f'={len(temp) + 1}-predictions.png'
+                )
+
+        plt.close('all')
+
+
+def make_gan_outputs():
+    import CE
+    import detection
+    args, output = load_parameters(device)
+    args["Batch_Size"] = 1
+
+    netG = CE.Generator(start_size=args['img_size'][0], out_size=args['inpaint_size'], dropout=args["dropout"])
+
+    netG.load_state_dict(output["generator_state_dict"])
+    netG.eval()
+    ano_dataset = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader = dataset.init_dataset_loader(ano_dataset, args)
+    plt.rcParams['figure.dpi'] = 1000
+
+    overlapSize = args['overlap']
+    input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256).to(device)
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    for i in range(22):
+
+        predictions = []
+
+        rows = np.random.choice([1, 2, 3, 4, 5, 8], p=[0.3, 0.3, 0.1, 0.1, 0.15, 0.05])
+        print(f"epoch {i}, rows @ epoch: {rows}")
+        for k in range(rows):
+            print(k)
+            new = next(loader)
+            img = new["image"]
+            img = img.reshape(img.shape[1], 1, *args["img_size"])
+            img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
+
+            slice = np.random.choice([0, 1, 2, 3], p=[0.15, 0.35, 0.35, 0.15])
+
+            img_mask = img_mask[slice, ...].reshape(1, 1, *args["img_size"]).to(device)
+            img = img[slice, ...].reshape(1, 1, *args["img_size"]).to(device)
+
+            # x_cpu = new["image"]
+            # x = x_cpu.to(device)
+
+            # B,C,W,H
+
+            recon_image = detection.ce_sliding_window(img, netG, input_cropped, args)
+
+            mse = ((recon_image - img).square() * 2) - 1
+            mse_threshold = mse > 0
+            mse_threshold = (mse_threshold.float() * 2) - 1
+
+            pred = torch.cat(
+                    (img, recon_image.reshape(1, 1, *args["img_size"]), mse, mse_threshold,
+                     img_mask)
+                    )
+
+            predictions.append(pred.cpu())
+
+        temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
+
+        fig, subplots = plt.subplots(
+                len(predictions), 5, sharex=True, sharey=True, constrained_layout=False, figsize=(5, len(predictions)),
+                squeeze=False,
+                gridspec_kw={'wspace': 0, 'hspace': 0}
+                )
+        plt.tick_params(
+                top=False, bottom=False, left=False, right=False,
+                labelleft=False, labelbottom=False
+                )
+        for i, brain in enumerate(predictions):
+            for plot in range(brain.shape[0]):
+                if plot == 2:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).detach().cpu().numpy(), cmap="hot")
+
+                else:
+                    subplots[i][plot].imshow(brain[plot].reshape(*brain.shape[-2:]).detach().cpu().numpy(), cmap="gray")
                 subplots[i][plot].tick_params(
                         top=False, bottom=False, left=False, right=False,
                         labelleft=False, labelbottom=False
@@ -530,6 +627,9 @@ if __name__ == '__main__':
 
     if str(sys.argv[1]) == "100":
         make_unet_outputs()
+    elif str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
+            "104":
+        make_gan_outputs()
     elif str(sys.argv[1]) == "23":
         make_varying_frequency_outputs()
     elif str(sys.argv[1]) == "26":
