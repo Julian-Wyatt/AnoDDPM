@@ -56,7 +56,7 @@ def cycle(iterable):
 #     ax.imshow(tempImg.reshape(image.shape[0], image.shape[2]), cmap='gray', animated=True)
 
 def main(save_videos=False):
-    DATASET = "./CancerousDataset/EdinburghDataset"
+    DATASET = "./DATASETS/CancerousDataset/EdinburghDataset"
     patients = os.listdir(DATASET)
 
     for patient in patients:
@@ -73,53 +73,26 @@ def main(save_videos=False):
                     print(f"{patient}/{data_folder} not a directory")
                     continue
                 for t1 in T1_files:
-                    if t1[-4:] == ".nii":
+                    if t1[-13:] == "corrected.nii":
                         # try:
                         # use slice 35-55
                         img = nib.load(f"{DATASET}/{patient}/{data_folder}/{t1}")
                         image = img.get_fdata()
                         image = np.rot90(image, 3, (0, 2))
+                        image = np.flip(image, 1)
                         image_mean = np.mean(image)
                         image_std = np.std(image)
                         img_range = (image_mean - 1 * image_std, image_mean + 2 * image_std)
                         image = np.clip(image, img_range[0], img_range[1])
                         image = image / (img_range[1] - img_range[0])
-                        image = np.transpose(image, (1, 0, 2))
+                        # image = np.transpose(image, (0, 1, 2))
 
                         np.save(
-                                f"{DATASET}/Anomalous-T1/raw/{patient}.npy", image.astype(
+                                f"{DATASET}/Anomalous-T1/raw_new/{patient}.npy", image.astype(
                                         np.float32
                                         )
                                 )
                         print(f"Saved {DATASET}/Anomalous-T1/raw/{patient}.npy")
-                        if save_videos:
-
-                            fig, ax = plt.subplots()
-
-                            def update(i):
-                                # print(i)
-                                tempImg = image[i, :, :].reshape(image.shape[0], image.shape[2])
-                                ax.set_title(f"slice: {i}")
-                                ax.imshow(tempImg, cmap='gray', animated=True)
-
-
-                            ani = animation.FuncAnimation(
-                                    fig, update, frames=image.shape[1], interval=50, blit=False,
-                                    repeat=False
-                                    )
-
-                            ani.save(f"{DATASET}/Anomalous-T1/video/{patient}.mp4")
-
-                            print(f"Saved {DATASET}/Anomalous-T1/raw/{patient}.mp4")
-
-                        outputImg = np.zeros((256, 256, 310))
-                        for i in range(image.shape[0]):
-                            tempImg = image[i:i + 1, :, :].reshape(image.shape[1], image.shape[2])
-                            img_sm = cv2.resize(tempImg, (310, 256), interpolation=cv2.INTER_CUBIC)
-                            outputImg[i, :, :] = img_sm
-
-                        image = outputImg
-                        print(f"Resized:  {DATASET}/Anomalous-T1/raw/{patient}")
 
                         if save_videos:
                             fig = plt.figure()
@@ -136,16 +109,43 @@ def main(save_videos=False):
                                     repeat_delay=1000
                                     )
 
-                            ani.save(f"{DATASET}/Anomalous-T1/video/{patient}-resized.mp4")
-                            plt.close(fig)
+                            ani.save(f"{DATASET}/Anomalous-T1/video/{patient}_new.mp4")
 
-                        np.save(
-                                f"{DATASET}/Anomalous-T1/raw/{patient}-resized.npy", image.astype(
-                                        np.float32
-                                        )
-                                )
 
-                        print(f"Saved resized  {DATASET}/Anomalous-T1/raw/{patient}")
+                        # outputImg = np.zeros((256, 256, 310))
+                        # for i in range(image.shape[0]):
+                        #     tempImg = image[i:i + 1, :, :].reshape(image.shape[1], image.shape[2])
+                        #     img_sm = cv2.resize(tempImg, (310, 256), interpolation=cv2.INTER_CUBIC)
+                        #     outputImg[i, :, :] = img_sm
+                        #
+                        # image = outputImg
+                        # print(f"Resized:  {DATASET}/Anomalous-T1/raw/{patient}")
+                        #
+                        # if save_videos:
+                        #     fig = plt.figure()
+                        #     ims = []
+                        #     for i in range(image.shape[0]):
+                        #         tempImg = image[i:i + 1, :, :]
+                        #         im = plt.imshow(
+                        #                 tempImg.reshape(image.shape[1], image.shape[2]), cmap='gray', animated=True
+                        #                 )
+                        #         ims.append([im])
+                        #
+                        #     ani = animation.ArtistAnimation(
+                        #             fig, ims, interval=50, blit=True,
+                        #             repeat_delay=1000
+                        #             )
+                        #
+                        #     ani.save(f"{DATASET}/Anomalous-T1/video/{patient}-resized.mp4")
+                        #     plt.close(fig)
+                        #
+                        # np.save(
+                        #         f"{DATASET}/Anomalous-T1/raw/{patient}-resized.npy", image.astype(
+                        #                 np.float32
+                        #                 )
+                        #         )
+                        #
+                        # print(f"Saved resized  {DATASET}/Anomalous-T1/raw/{patient}")
 
 
 def checkDataSet():
@@ -239,7 +239,7 @@ def output_videos_for_dataset():
 
 
 def get_segmented_labels(save_videos=True):
-    DATASET = "./CancerousDataset/EdinburghDataset"
+    DATASET = "./DATASETS/CancerousDataset/EdinburghDataset"
     patients = os.listdir(DATASET)
 
     for patient in patients:
@@ -263,13 +263,14 @@ def get_segmented_labels(save_videos=True):
                         # use slice 35-55
                         img = nib.load(f"{DATASET}/{patient}/{data_folder}/{mask}")
                         image = img.get_fdata()
-                        image = np.rot90(image, 3, (0, 2))
                         image_mean = np.mean(image)
                         image_std = np.std(image)
                         img_range = (image_mean - 1 * image_std, image_mean + 2 * image_std)
                         image = np.clip(image, img_range[0], img_range[1])
                         image = image / (img_range[1] - img_range[0])
-                        image = np.transpose(image, (1, 0, 2))
+                        # 256,256,156
+                        # 256,156,256
+                        image = np.transpose(image, (1, 2, 0))
 
                         np.save(
                                 f"{DATASET}/Anomalous-T1/mask/{patient}.npy", image.astype(
@@ -278,11 +279,17 @@ def get_segmented_labels(save_videos=True):
                                 )
                         print(image.shape)
                         print(f"Saved {DATASET}/Anomalous-T1/raw/{patient}.npy")
+
                         if save_videos:
+                            real_img = np.load(f"{DATASET}/Anomalous-T1/raw_new/{patient}.npy")
+                            print(real_img.shape, image.shape)
                             fig = plt.figure()
                             ims = []
+                            real_img = real_img + image / 2
+                            print(real_img.shape, image.shape)
                             for i in range(image.shape[0]):
-                                tempImg = image[i:i + 1, :, :]
+                                tempImg = real_img[i:i + 1, :, :]
+
                                 im = plt.imshow(
                                         tempImg.reshape(image.shape[1], image.shape[2]), cmap='gray', animated=True
                                         )
@@ -296,40 +303,6 @@ def get_segmented_labels(save_videos=True):
                             ani.save(f"{DATASET}/Anomalous-T1/mask/videos/{patient}.mp4")
                             plt.close(fig)
 
-                        outputImg = np.zeros((256, 256, 310))
-                        for i in range(image.shape[0]):
-                            tempImg = image[i:i + 1, :, :].reshape(image.shape[1], image.shape[2])
-                            img_sm = cv2.resize(tempImg, (310, 256), interpolation=cv2.INTER_CUBIC)
-                            outputImg[i, :, :] = img_sm
-
-                        image = outputImg
-                        print(f"Resized:  {DATASET}/Anomalous-T1/raw/{patient}")
-
-                        if save_videos:
-                            fig = plt.figure()
-                            ims = []
-                            for i in range(image.shape[0]):
-                                tempImg = image[i:i + 1, :, :]
-                                im = plt.imshow(
-                                        tempImg.reshape(image.shape[1], image.shape[2]), cmap='gray', animated=True
-                                        )
-                                ims.append([im])
-
-                            ani = animation.ArtistAnimation(
-                                    fig, ims, interval=50, blit=True,
-                                    repeat_delay=1000
-                                    )
-
-                            ani.save(f"{DATASET}/Anomalous-T1/mask/videos/{patient}-resized.mp4")
-                            plt.close(fig)
-
-                        np.save(
-                                f"{DATASET}/Anomalous-T1/mask/{patient}-resized.npy", image.astype(
-                                        np.float32
-                                        )
-                                )
-
-                        print(f"Saved resized  {DATASET}/Anomalous-T1/raw/{patient}")
 
 
 def load_datasets_for_test():
@@ -476,7 +449,7 @@ class AnomalousMRIDataset(Dataset):
             "18886": range(120, 180), "18975": range(170, 194), "19015": range(158, 195), "19085": range(155, 195),
             "19275": range(184, 213), "19277": range(158, 209), "19357": range(158, 210), "19398": range(164, 200),
             "19423": range(142, 200), "19567": range(160, 200), "19628": range(147, 210), "19691": range(155, 200),
-            "19723": range(140, 187), "19849": range(150, 180)
+            "19723": range(140, 170), "19849": range(150, 180)
             }
 
         self.filenames = self.slices.keys()
@@ -494,7 +467,7 @@ class AnomalousMRIDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         if os.path.exists(os.path.join(f"{self.filenames[idx][:-4]}.npy")):
-            if self.resized:
+            if self.resized and os.path.exists(os.path.join(f"{self.filenames[idx][:-4]}-resized.npy")):
                 image = np.load(os.path.join(f"{self.filenames[idx][:-4]}-resized.npy"))
             else:
                 image = np.load(os.path.join(f"{self.filenames[idx][:-4]}.npy"))
@@ -635,6 +608,6 @@ def load_image_mask(file, img_size, Ano_Dataset_Class):
 
 
 if __name__ == "__main__":
-    load_datasets_for_test()
-    # get_segmented_labels(False)
-    # main()
+    # load_datasets_for_test()
+    get_segmented_labels(True)
+    # main(True)
