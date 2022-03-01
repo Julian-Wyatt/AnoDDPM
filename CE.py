@@ -237,7 +237,6 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
             errD_real.backward()
             D_x = output.data.mean()
 
-            print(input_cropped)
             # train the discriminator with fake data---
             fake = netG(input_cropped)
 

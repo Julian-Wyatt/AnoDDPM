@@ -521,6 +521,7 @@ def gan_anomalous():
     netG = CE.Generator(start_size=args['img_size'][0], out_size=args['inpaint_size'], dropout=args["dropout"])
 
     netG.load_state_dict(output["generator_state_dict"])
+    netG.to(device)
     netG.eval()
     ano_dataset = dataset.AnomalousMRIDataset(
             ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
@@ -531,7 +532,8 @@ def gan_anomalous():
     plt.rcParams['figure.dpi'] = 1000
 
     overlapSize = args['overlap']
-    input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256).to(device)
+    input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256)
+    input_cropped = input_cropped.to(device)
 
     try:
         os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}/Anomalous')
@@ -570,6 +572,7 @@ def gan_anomalous():
             img_mask = img_mask_whole[slice_number, ...].to(device)
             img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
 
+            print(input_cropped.device, netG.device, img.device)
             recon_image = ce_sliding_window(img, netG, input_cropped, args)
 
             evaluation.heatmap(
@@ -629,6 +632,7 @@ def gan_anomalous():
 
 
 def ce_sliding_window(img, netG, input_cropped, args):
+    recon_image = input_cropped.clone()
     for center_offset_y in range(0, 200, args['inpaint_size']):
 
         for center_offset_x in range(0, 200, args['inpaint_size']):
@@ -641,7 +645,6 @@ def ce_sliding_window(img, netG, input_cropped, args):
 
             fake = netG(input_cropped)
 
-            recon_image = input_cropped.clone()
             recon_image.data[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
             16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x] = fake.data
 
