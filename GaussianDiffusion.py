@@ -309,7 +309,6 @@ class GaussianDiffusionModel:
 
     def forward_backward(
             self, model, x, see_whole_sequence="half", t_distance=None, denoise_fn="gauss",
-            noise_fn=None
             ):
         assert see_whole_sequence == "whole" or see_whole_sequence == "half" or see_whole_sequence == None
 
@@ -324,10 +323,7 @@ class GaussianDiffusionModel:
             for t in range(int(t_distance)):
                 t_batch = torch.tensor([t], device=x.device).repeat(x.shape[0])
                 # noise = torch.randn_like(x)
-                if noise_fn == "octave":
-                    noise = generate_simplex_noise(self.simplex, x, t_batch, False).float()
-                else:
-                    noise = self.noise_fn(x, t_batch).float()
+                noise = self.noise_fn(x, t_batch).float()
                 with torch.no_grad():
                     x = self.sample_q_gradual(x, t_batch, noise)
 
