@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 from skimage.metrics import structural_similarity as ssim
+from sklearn.metrics import auc, roc_curve
 
 from helpers import gridify_output
 
@@ -73,6 +74,17 @@ def FPR(real_mask, recon_mask):
     FP = ((real_mask == 1) & (recon_mask == 0))
     TN = ((real_mask == 0) & (recon_mask == 0))
     return torch.sum(FP).float() / ((torch.sum(FP) + torch.sum(TN)).float() + 1e-6)
+
+
+def ROC_AUC(real_mask, square_error):
+    if type(real_mask) == torch.Tensor:
+        return roc_curve(real_mask.detach().cpu().numpy().flatten(), square_error.detach().cpu().numpy().flatten())
+    else:
+        return roc_curve(real_mask.flatten(), square_error.flatten())
+
+
+def AUC_score(fpr, tpr):
+    return auc(fpr, tpr)
 
 
 def FID():

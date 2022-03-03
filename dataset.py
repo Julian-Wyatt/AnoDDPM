@@ -336,11 +336,11 @@ def init_datasets(ROOT_DIR, args):
     return training_dataset, testing_dataset
 
 
-def init_dataset_loader(mri_dataset, args):
+def init_dataset_loader(mri_dataset, args, shuffle=True):
     dataset_loader = cycle(
             torch.utils.data.DataLoader(
                     mri_dataset,
-                    batch_size=args['Batch_Size'], shuffle=True,
+                    batch_size=args['Batch_Size'], shuffle=shuffle,
                     num_workers=0, drop_last=True
                     )
             )
