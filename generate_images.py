@@ -28,7 +28,7 @@ def output_denoise_sequence(sequence: list, filename, masks, predictions):
         output[13 * (j + 1) - 2] = predictions[j]
 
     fig, subplots = plt.subplots(
-            len(sequence), 13, sharex=True, sharey=True, constrained_layout=False, figsize=(13, len(sequence)),
+            len(sequence), 13, figsize=(13, len(sequence)),
             gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
             )
 
@@ -61,7 +61,7 @@ def output_denoise_sequence(sequence: list, filename, masks, predictions):
     plt.savefig(filename)
 
 
-def output_masked_comparison(sequence, filename):
+def output_masked_comparison(sequence, filename, t_distance=250):
     """
     sequence is ideally [[x_0,recon,mse,threshold_mse,ground_truth]*4] where
     [x_0,recon,mse,threshold_mse,ground_truth] is a single (5,1,256,256) torch tensor
@@ -73,7 +73,7 @@ def output_masked_comparison(sequence, filename):
         sequence = [sequence]
 
     fig, subplots = plt.subplots(
-            len(sequence), 6, sharex=True, sharey=True, constrained_layout=False, figsize=(6, len(sequence)),
+            len(sequence), 6, constrained_layout=False, figsize=(6, len(sequence)),
             squeeze=False,
             gridspec_kw={'wspace': 0, 'hspace': 0}
             )
@@ -93,7 +93,10 @@ def output_masked_comparison(sequence, filename):
                     labelleft=False, labelbottom=False
                     )
 
-    for i, val in enumerate(["$x_0$", "$x_{250}$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
+    for i, val in enumerate(
+            ["$x_0$", f"$x_{{{t_distance}}}$", "Reconstruction", "Square Error", "Prediction",
+             "Ground Truth"]
+            ):
         subplots[0][i].set_xlabel(f"{val}", fontsize=6)
         subplots[0][i].xaxis.set_label_position("top")
 
@@ -107,7 +110,7 @@ def make_prediction(real, recon, mask, x_t):
     return torch.cat((real, x_t, recon, mse, mse_threshold, mask)), mse_threshold
 
 
-def make_all_outputs():
+def make_ano_outputs():
     args, output = load_parameters(device)
 
     unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
@@ -176,13 +179,239 @@ def make_all_outputs():
         temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
         output_masked_comparison(
                 predictions, f'./final-outputs/ARGS={args["arg_num"]}/attempt'
-                             f'={len(temp) + 1}-predictions.png'
+                             f'={len(temp) + 1}-predictions.png', t_distance
                 )
         output_denoise_sequence(
                 sequences, f'./final-outputs/ARGS={args["arg_num"]}/attempt'
                            f'={len(temp) + 1}-sequence.png', masks, mse_thresholds
                 )
         plt.close('all')
+
+
+def make_test_set_outputs():
+    sys.argv[1] = "28"
+    args_simplex, output_simplex = load_parameters(device)
+    sys.argv[1] = "26"
+    args_gauss, output_gauss = load_parameters(device)
+
+    unet_simplex = UNetModel(
+            args_simplex['img_size'][0], args_simplex['base_channels'], channel_mults=args_simplex['channel_mults']
+            )
+    unet_gauss = UNetModel(
+            args_gauss['img_size'][0], args_gauss['base_channels'], channel_mults=args_gauss['channel_mults']
+            )
+
+    betas = get_beta_schedule(args_simplex['T'], args_simplex['beta_schedule'])
+
+    diff_simplex = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_simplex["noise_fn"]
+            )
+    diff_gauss = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_gauss["noise_fn"]
+            )
+
+    unet_simplex.load_state_dict(output_simplex["ema"])
+    unet_gauss.load_state_dict(output_gauss["ema"])
+    unet_simplex.eval()
+    unet_gauss.eval()
+    training_dataset, testing_dataset = dataset.init_datasets("./", args_simplex)
+    testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args_simplex)
+    plt.rcParams['figure.dpi'] = 1000
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args_simplex["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    t_distance = 250
+    for i in range(20):
+
+        sequences = []
+        unet_simplex.to(device)
+        rows = 2
+        for k in range(rows):
+            new = next(testing_dataset_loader)
+            img = new["image"].to(device)
+
+            output = diff_simplex.forward_backward(
+                    unet_simplex, img.reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence="whole",
+                    t_distance=t_distance, denoise_fn=args_simplex["noise_fn"]
+                    )
+
+            sequences.append(output)
+        unet_simplex.cpu()
+
+        unet_gauss.to(device)
+        for k in range(rows):
+            new = next(testing_dataset_loader)
+            img = new["image"].to(device)
+
+            output = diff_gauss.forward_backward(
+                    unet_gauss, img.reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence="whole",
+                    t_distance=t_distance, denoise_fn=args_gauss["noise_fn"]
+                    )
+
+            sequences.append(output)
+        unet_gauss.cpu()
+
+        temp = os.listdir(f"./final-outputs/ARGS={args_simplex['arg_num']}")
+
+        if len(sequences) > 10:
+            sequences = [sequences]
+
+        relevant_elements_forward = np.linspace(0, len(sequences[0]) // 2, 6).astype(np.int32)
+        relevant_elements_backward = (-1 * relevant_elements_forward[-2::-1]) - 1
+
+        relevant_elements = np.append(relevant_elements_forward, relevant_elements_backward)
+
+        output = torch.empty(11 * len(sequences), 1, 256, 256)
+
+        for j, new_sequence in enumerate(sequences):
+
+            for i, val in enumerate(relevant_elements):
+                output[11 * j + i] = new_sequence[val]
+
+        fig, subplots = plt.subplots(
+                len(sequences), 11, figsize=(11, len(sequences)),
+                gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
+                )
+
+        for brain in range(len(sequences)):
+            for noise in range(11):
+                # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
+                subplots[brain][noise].imshow(
+                        output[11 * brain + noise].reshape(*output[0].shape[-2:]).cpu().numpy(),
+                        cmap="gray"
+                        )
+                subplots[brain][noise].tick_params(
+                        top=False, bottom=False, left=False, right=False,
+                        labelleft=False, labelbottom=False
+                        )
+                # subplots[brain][noise].axis('off')
+        for i in range(6):
+
+            subplots[0][i].set_xlabel(f"$x_{{{relevant_elements[i]}}}$", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        for i in range(6, 11):
+            subplots[0][i].set_xlabel(f"$x_{{{relevant_elements_forward[::-1][1:][i - 6]}}}$", fontsize=6)
+            subplots[0][i].xaxis.set_label_position("top")
+
+        # plt.show()
+        # plt.pause(5)
+        plt.savefig(
+                f'./final-outputs/ARGS={args_simplex["arg_num"]}/test_set_mixed_attempt'
+                f'={len(temp) + 1}-sequence.png'
+                )
+        plt.close('all')
+
+
+def make_graph_outputs():
+    sys.argv[1] = "28"
+    args_simplex, output_simplex = load_parameters(device)
+    sys.argv[1] = "26"
+    args_gauss, output_gauss = load_parameters(device)
+
+    unet_simplex = UNetModel(
+            args_simplex['img_size'][0], args_simplex['base_channels'], channel_mults=args_simplex['channel_mults']
+            )
+    unet_gauss = UNetModel(
+            args_gauss['img_size'][0], args_gauss['base_channels'], channel_mults=args_gauss['channel_mults']
+            )
+
+    betas = get_beta_schedule(args_simplex['T'], args_simplex['beta_schedule'])
+
+    diff_simplex = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_simplex["noise_fn"]
+            )
+    diff_gauss = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_gauss["noise_fn"]
+            )
+
+    unet_simplex.load_state_dict(output_simplex["ema"])
+    unet_gauss.load_state_dict(output_gauss["ema"])
+    unet_simplex.eval()
+    unet_gauss.eval()
+    ano_dataset = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args_gauss['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader = dataset.init_dataset_loader(ano_dataset, args_gauss, shuffle=True)
+    plt.rcParams['figure.dpi'] = 1000
+
+    for i in [f'./final-outputs/', f'./final-outputs/ARGS={args_simplex["arg_num"]}']:
+        try:
+            os.makedirs(i)
+        except OSError:
+            pass
+
+    t_distance = 200
+    slice = 1
+    for i in range(20):
+
+        predictions = []
+        unet_simplex.to(device)
+        rows = 2
+        for k in range(rows):
+            new = next(loader)
+            while new['filenames'][0][-9:-4] not in ["19691", "18756"]:
+                new = next(loader)
+            img = new["image"].to(device)
+            img = img.reshape(img.shape[1], 1, *args_simplex["img_size"])
+            img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args_simplex['img_size'], ano_dataset)
+            img_mask = img_mask.to(device)
+
+            output = diff_simplex.forward_backward(
+                    unet_simplex, img[slice, ...].reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence="whole",
+                    t_distance=t_distance, denoise_fn=args_simplex["noise_fn"]
+                    )
+            output_images, mse_threshold = make_prediction(
+                    img[slice, ...].reshape(1, 1, *args_simplex["img_size"]), output[-1].to(device),
+                    img_mask[slice, ...].reshape(1, 1, *args_simplex["img_size"]), output[t_distance // 2].to(device)
+                    )
+            predictions.append(
+                    output_images
+                    )
+
+        unet_simplex.cpu()
+
+        unet_gauss.to(device)
+        for k in range(rows):
+            new = next(loader)
+            while new['filenames'][0][-9:-4] not in ["19691", "18756"]:
+                new = next(loader)
+            img = new["image"].to(device)
+            img = img.reshape(img.shape[1], 1, *args_simplex["img_size"])
+            img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args_simplex['img_size'], ano_dataset)
+            img_mask = img_mask.to(device)
+
+            output = diff_gauss.forward_backward(
+                    unet_gauss, img[slice, ...].reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence="whole",
+                    t_distance=t_distance, denoise_fn=args_gauss["noise_fn"]
+                    )
+
+            output_images, mse_threshold = make_prediction(
+                    img[slice, ...].reshape(1, 1, *args_simplex["img_size"]), output[-1].to(device),
+                    img_mask[slice, ...].reshape(1, 1, *args_simplex["img_size"]), output[t_distance // 2].to(device)
+                    )
+            predictions.append(
+                    output_images
+                    )
+        unet_gauss.cpu()
+
+        temp = os.listdir(f"./final-outputs/ARGS={args_simplex['arg_num']}")
+
+        output_masked_comparison(predictions, f"./final-outputs/test{i}.png", t_distance)
 
 
 def make_varying_frequency_outputs():
@@ -369,21 +598,21 @@ def gauss_varyingT_outputs():
 
         subplots[0][1].imshow(output_250[251 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
         subplots[0][2].imshow(output_250[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[0][3].imshow(output_250_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
-        subplots[0][4].imshow(output_250_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[0][5].imshow(output_250_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[0][3].imshow(output_250_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[0][4].imshow(output_250_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[0][5].imshow(output_250_images[5].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
 
         subplots[1][1].imshow(output_500[501 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
         subplots[1][2].imshow(output_500[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[1][3].imshow(output_500_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
-        subplots[1][4].imshow(output_500_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[1][5].imshow(output_500_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[1][3].imshow(output_500_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[1][4].imshow(output_500_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[1][5].imshow(output_500_images[5].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
 
         subplots[2][1].imshow(output_750[751 // 2].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
         subplots[2][2].imshow(output_750[-1].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[2][3].imshow(output_750_images[2].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
-        subplots[2][4].imshow(output_750_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
-        subplots[2][5].imshow(output_750_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[2][3].imshow(output_750_images[3].reshape(*args["img_size"]).cpu().numpy(), cmap="hot")
+        subplots[2][4].imshow(output_750_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
+        subplots[2][5].imshow(output_750_images[5].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
 
         for i in range(3):
             for j in range(6):
@@ -506,6 +735,7 @@ def make_gan_outputs():
     netG = CE.Generator(start_size=args['img_size'][0], out_size=args['inpaint_size'], dropout=args["dropout"])
 
     netG.load_state_dict(output["generator_state_dict"])
+    netG.to(device)
     netG.eval()
     ano_dataset = dataset.AnomalousMRIDataset(
             ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
@@ -513,10 +743,10 @@ def make_gan_outputs():
             )
 
     loader = dataset.init_dataset_loader(ano_dataset, args)
-    plt.rcParams['figure.dpi'] = 1000
 
     overlapSize = args['overlap']
-    input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256).to(device)
+    input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256)
+    input_cropped = input_cropped.to(device)
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
         try:
@@ -547,7 +777,23 @@ def make_gan_outputs():
 
             # B,C,W,H
 
-            recon_image = detection.ce_sliding_window(img, netG, input_cropped, args)
+            if args['type'] == 'sliding':
+                recon_image = detection.ce_sliding_window(img, netG, input_cropped, args)
+            else:
+                input_cropped.resize_(img.size()).copy_(img)
+                recon_image = input_cropped.clone()
+                with torch.no_grad():
+                    input_cropped.resize_(img.size()).copy_(img)
+                    input_cropped[:, 0,
+                    args['img_size'][0] // 4 + overlapSize:
+                    args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize,
+                    args['img_size'][0] // 4 + overlapSize:
+                    args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize] \
+                        = 0
+                fake = netG(input_cropped)
+
+                recon_image.data[:, :, args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4,
+                args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4] = fake.data
 
             mse = ((recon_image - img).square() * 2) - 1
             mse_threshold = mse > 0
@@ -625,6 +871,8 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     import sys
 
+    plt.rcParams['figure.dpi'] = 1000
+
     if str(sys.argv[1]) == "100":
         make_unet_outputs()
     elif str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
@@ -633,7 +881,8 @@ if __name__ == '__main__':
     elif str(sys.argv[1]) == "23":
         make_varying_frequency_outputs()
     elif str(sys.argv[1]) == "26":
-        gauss_varyingT_outputs()
-        make_all_outputs()
+        # gauss_varyingT_outputs()
+        make_ano_outputs()
     else:
-        make_all_outputs()
+        make_graph_outputs()
+        # make_test_set_outputs()
