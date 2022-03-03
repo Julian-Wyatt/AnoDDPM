@@ -1,4 +1,3 @@
-import random
 import time
 from random import seed
 
@@ -26,10 +25,10 @@ class Generator(torch.nn.Module):
         if start_size == 256:
             enc_channels = [1, 64, 64, 128, 256, 512, 1024]
         else:
-            enc_channels = [1, 64, 64, 128, 256, 512]
+            enc_channels = [1, 64, 128, 256, 512]
 
         if out_size == 64:
-            dec_channels = [512, 256, 128, 64, 1]
+            dec_channels = [512, 256, 128, 1]
         else:
             dec_channels = [256, 128, 64, 1]
 
@@ -208,24 +207,28 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
             # B,C,W,H
 
-            if args["inpaint_size"] == 32:
-
-                center_offset_y = random.randint(0, 200)
-                center_offset_x = random.randint(0, 200)
+            # B,C,W,H
+            if args['type'] == 'sliding':
+                center_offset_y = np.random.choice(np.arange(0, 97, args['inpaint_size']))
+                center_offset_x = np.random.choice(np.arange(0, 97, args['inpaint_size']))
+                x_start, x_end = overlapSize + center_offset_x, center_offset_x - overlapSize + args['inpaint_size']
+                y_start, y_end = overlapSize + center_offset_y, center_offset_y - overlapSize + args['inpaint_size']
             else:
-                center_offset_y = random.randint(0, 175)
-                center_offset_x = random.randint(0, 175)
+                x_start, x_end = args['img_size'][0] // 4 + overlapSize, args['inpaint_size'] + args['img_size'][
+                    0] // 4 - overlapSize
+                y_start, y_end = args['img_size'][0] // 4 + overlapSize, args['inpaint_size'] + args['img_size'][
+                    0] // 4 - overlapSize
 
-            real_crop_cpu = x_cpu[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
-                            16 + center_offset_y:args['inpaint_size'] + 16 + center_offset_y]
+            real_crop_cpu = x_cpu[:, :, x_start - overlapSize:x_end + overlapSize,
+                            y_start - overlapSize:y_end + overlapSize]
 
             with torch.no_grad():
                 input_real.resize_(x_cpu.size()).copy_(x_cpu)
                 input_cropped.resize_(x_cpu.size()).copy_(x_cpu)
                 real_center.resize_(real_crop_cpu.size()).copy_(real_crop_cpu)
+
                 input_cropped[:, 0,
-                16 + center_offset_x + overlapSize:16 + args['inpaint_size'] + center_offset_x - overlapSize,
-                16 + center_offset_y + overlapSize:16 + args['inpaint_size'] + center_offset_y - overlapSize] = 0
+                x_start:x_end, y_start:y_end] = 0
 
             # start the discriminator by training with real data---
             netD.zero_grad()
@@ -266,8 +269,8 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
             with torch.no_grad():
                 recon_image = input_cropped.clone()
-                recon_image.data[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
-                16 + center_offset_y:args['inpaint_size'] + 16 + center_offset_y] = fake.data
+                recon_image.data[:, :, x_start - overlapSize:x_end + overlapSize,
+                y_start - overlapSize:y_end + overlapSize] = fake.data
 
             # plt.imshow(gridify_output(torch.cat((input_cropped[:8], recon_image[:8])), 4))
             # plt.show()
@@ -436,6 +439,7 @@ def testing(testing_dataset_loader, args, netG, in_shape=256, overlapSize=4):
     input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256).to(device)
     psnr_whole = []
     psnr = []
+    SSIM = []
     for epoch in range(test_iters // args["Batch_Size"] + 5):
         data = next(testing_dataset_loader)
         x_cpu = data["image"]
@@ -443,24 +447,29 @@ def testing(testing_dataset_loader, args, netG, in_shape=256, overlapSize=4):
 
         # B,C,W,H
 
-        if args["img_size"][0] == 256:
-            center_offset_y = random.randint(0, 200)
-            center_offset_x = random.randint(0, 200)
+        if args['type'] == 'sliding':
+            center_offset_y = np.random.choice(np.arange(0, 97, args['inpaint_size']))
+            center_offset_x = np.random.choice(np.arange(0, 97, args['inpaint_size']))
+            x_start, x_end = overlapSize + center_offset_x, center_offset_x - overlapSize + args['inpaint_size']
+            y_start, y_end = overlapSize + center_offset_y, center_offset_y - overlapSize + args['inpaint_size']
         else:
-            center_offset_y = random.randint(0, 150)
-            center_offset_x = random.randint(0, 150)
+            x_start, x_end = args['img_size'][0] // 4 + overlapSize, args['inpaint_size'] + args['img_size'][
+                0] // 4 - overlapSize
+            y_start, y_end = args['img_size'][0] // 4 + overlapSize, args['inpaint_size'] + args['img_size'][
+                0] // 4 - overlapSize
 
         with torch.no_grad():
             input_cropped.resize_(x_cpu.size()).copy_(x_cpu)
-            input_cropped[:, 0,
-            16 + center_offset_x + overlapSize:16 + args['inpaint_size'] + center_offset_x - overlapSize,
-            16 + center_offset_y + overlapSize:16 + args['inpaint_size'] + center_offset_y - overlapSize] = 0
+            input_cropped[:, 0, x_start:x_end, y_start:y_end] = 0
 
         fake = netG(input_cropped)
 
         recon_image = input_cropped.clone()
-        recon_image.data[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
-        16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x] = fake.data
+        recon_image.data[:, :, x_start - overlapSize:x_end + overlapSize,
+        y_start - overlapSize:y_end + overlapSize] = fake.data
+
+        real_center = x_cpu[:, :, x_start - overlapSize:x_end + overlapSize,
+                      y_start - overlapSize:y_end + overlapSize].to(device)
 
         training_outputs(
                 x, recon_image, epoch * 50, netG=netG, args=args, row_size=4, filename=f"testing-epoch={epoch}.png"
@@ -469,11 +478,18 @@ def testing(testing_dataset_loader, args, netG, in_shape=256, overlapSize=4):
         psnr_whole.append(evaluation.PSNR(recon_image, x))
         psnr.append(
                 evaluation.PSNR(
-                        fake, x[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
-                              16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x]
+                        fake, real_center
                         )
                 )
+
+        SSIM.append(
+                [evaluation.SSIM(
+                        real_center[i].reshape(args['inpaint_size'], args['inpaint_size']),
+                        fake[i].reshape(args['inpaint_size'], args['inpaint_size'])
+                        ) for i in range(args["Batch_Size"])]
+                )
     print(f"Test set PSNR: {np.mean(psnr)} +- {np.std(psnr)}")
+    print(f"Test set SSIM: {np.mean(SSIM)} +- {np.std(SSIM)}")
 
 
 def main():
@@ -489,35 +505,36 @@ def main():
             pass
 
     args = {
-        "img_size":     [256, 256],
+        "img_size":     [128, 128],
         "inpaint_size": 32,
-        "overlap":      4,
-        "EPOCHS":       3000,
+        "overlap":      6,
+        "EPOCHS":       5000,
         "Batch_Size":   16,
         "dataset":      "mri",
         "dropout":      0.2,
         "lr":           0.0002,
         "l2wt":         0.999,
         "weight_decay": 0.0,
+        "type":         'centered',
         'random_slice': True,
         }
     if str(sys.argv[1]) == "101":
-        args['inpaint_size'] = 32
-        args['arg_num'] = 101
-    elif str(sys.argv[1]) == "102":
         args['inpaint_size'] = 64
+        args['arg_num'] = 101
+        args["type"] = 'sliding'
+    elif str(sys.argv[1]) == "102":
+        args['inpaint_size'] = 32
         args['arg_num'] = 102
+        args["type"] = 'sliding'
 
     elif str(sys.argv[1]) == "103":
         args['inpaint_size'] = 64
         args['arg_num'] = 103
-        args["img_size"]: [128, 128]
     elif str(sys.argv[1]) == "104":
         args['inpaint_size'] = 32
         args['arg_num'] = 104
-        args["img_size"]: [128, 128]
 
-    print(f"inpaint size: {args['inpaint_size']}")
+    print(f"inpaint size: {args['inpaint_size']}, arg_num {args['arg_num']}")
     # make arg specific directories
     for i in [f'./model/diff-params-ARGS={args["arg_num"]}',
               f'./model/diff-params-ARGS={args["arg_num"]}/checkpoint',
