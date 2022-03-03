@@ -202,12 +202,15 @@ def anomalous_dice_calculation():
     for i in range(len(ano_dataset)):
 
         new = next(loader)
-        img = new["image"].to(device)
-        img = img.reshape(img.shape[1], 1, *args["img_size"])
+        image = new["image"].to(device)
+        image = image.reshape(image.shape[1], 1, *args["img_size"])
         img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
         img_mask = img_mask.to(device)
-        img_mask = (img_mask > 0).float()
+        img_mask_whole = (img_mask > 0).float()
         for slice_number in range(4):
+            img = image[slice_number, ...].to(device).reshape(1, 1, *args["img_size"])
+            img_mask = img_mask_whole[slice_number, ...].to(device)
+            img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
             try:
                 os.makedirs(
                         f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
@@ -216,21 +219,27 @@ def anomalous_dice_calculation():
             except OSError:
                 pass
             output = diff.forward_backward(
-                    unet, img[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                    unet, img,
                     see_whole_sequence=None,
                     t_distance=250, denoise_fn=args["noise_fn"]
                     )
 
             evaluation.heatmap(
-                    img[slice_number, ...].reshape(1, 1, *args["img_size"]), output.to(device),
-                    img_mask[slice_number, ...].reshape(1, 1, *args["img_size"]),
+                    img, output.to(device),
+                    img_mask,
                     f"./diffusion-training-images/ARGS={args['arg_num']}/{new['filenames'][0][-9:-4]}"
                     f"-{new['slices'][slice_number].cpu().item()}.png",
-                    save=True
+                    save=False
                     )
             mse = (img - output).square()
             mse = (mse > 0.5).float()
-            dice_data.append(evaluation.dice_coeff(img, output.to(device), img_mask, mse=mse).cpu().item())
+            # print(img.shape, output.shape, img_mask.shape, mse.shape)
+            dice_data.append(
+                    evaluation.dice_coeff(
+                            img, output.to(device),
+                            img_mask, mse=mse
+                            ).cpu().item()
+                    )
             ssim_data.append(
                     evaluation.SSIM(img.reshape(*args["img_size"]), output.reshape(*args["img_size"]))
                     )
@@ -238,7 +247,6 @@ def anomalous_dice_calculation():
             recall.append(evaluation.recall(img_mask, mse).cpu().numpy())
             IOU.append(evaluation.IoU(img_mask, mse))
             FPR.append(evaluation.FPR(img_mask, mse).cpu().numpy())
-
             plt.close('all')
 
         time_taken = time.time() - start_time
@@ -262,7 +270,9 @@ def anomalous_dice_calculation():
         print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
         print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
         print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
+        print("\n")
 
+    print()
     print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
     print(
             f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
@@ -403,6 +413,293 @@ def graph_data():
             for i in [dice_data, ssim_data, IOU, precision, recall, FPR]:
                 f.write(",".join([f"{j:.4f}" for j in i]))
                 f.write("\n")
+
+
+def roc_data():
+    sys.argv[1] = "28"
+    args_simplex, output_simplex = load_parameters(device)
+    sys.argv[1] = "27"
+    args_hybrid, output_hybrid = load_parameters(device)
+    sys.argv[1] = "26"
+    args_gauss, output_gauss = load_parameters(device)
+
+    unet_simplex = UNetModel(
+            args_simplex['img_size'][0], args_simplex['base_channels'], channel_mults=args_simplex['channel_mults']
+            )
+    unet_hybrid = UNetModel(
+            args_simplex['img_size'][0], args_simplex['base_channels'], channel_mults=args_simplex['channel_mults']
+            )
+    unet_gauss = UNetModel(
+            args_gauss['img_size'][0], args_gauss['base_channels'], channel_mults=args_gauss['channel_mults']
+            )
+
+    betas = get_beta_schedule(args_simplex['T'], args_simplex['beta_schedule'])
+
+    diff_simplex = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_simplex["noise_fn"]
+            )
+    diff_gauss = GaussianDiffusionModel(
+            args_simplex['img_size'], betas, loss_weight=args_simplex['loss_weight'],
+            loss_type=args_simplex['loss-type'], noise=args_gauss["noise_fn"]
+            )
+
+    unet_hybrid.load_state_dict(output_hybrid["ema"])
+    unet_simplex.load_state_dict(output_simplex["ema"])
+    unet_gauss.load_state_dict(output_gauss["ema"])
+    unet_simplex.eval()
+    unet_gauss.eval()
+
+    import CE
+    sys.argv[1] = "103"
+    args_GAN, output_GAN = load_parameters(device)
+    args_GAN["Batch_Size"] = 1
+    print(args_GAN)
+    netG = CE.Generator(
+            start_size=args_GAN['img_size'][0], out_size=args_GAN['inpaint_size'], dropout=args_GAN["dropout"]
+            )
+
+    netG.load_state_dict(output_GAN["generator_state_dict"])
+    netG.eval()
+    ano_dataset_128 = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args_GAN['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+
+    loader_128 = dataset.init_dataset_loader(ano_dataset_128, args_GAN, False)
+
+    overlapSize = args_GAN['overlap']
+    input_cropped = torch.FloatTensor(args_GAN['Batch_Size'], 1, 128, 128)
+
+    ano_dataset_256 = dataset.AnomalousMRIDataset(
+            ROOT_DIR=f'{DATASET_PATH}', img_size=args_simplex['img_size'],
+            slice_selection="iterateKnown_restricted", resized=False
+            )
+    loader_256 = dataset.init_dataset_loader(ano_dataset_256, args_simplex, False)
+    plt.rcParams['figure.dpi'] = 200
+
+    try:
+        os.makedirs(f'./metrics/')
+    except OSError:
+        pass
+
+    try:
+        os.makedirs(f'./metrics/ROC_data_3/')
+    except OSError:
+        pass
+    t_distance = 250
+    start_time = time.time()
+
+    simplex_sqe = []
+    gauss_sqe = []
+    GAN_sqe = []
+    hybrid_sqe = []
+    img_128 = []
+    img_256 = []
+    simplex_AUC = []
+    gauss_AUC = []
+    GAN_AUC = []
+    hybrid_AUC = []
+    for i in range(len(ano_dataset_256)):
+
+        new_256 = next(loader_256)
+        img_256_whole = new_256["image"].to(device)
+        img_256_whole = img_256_whole.reshape(img_256_whole.shape[1], 1, *args_simplex["img_size"])
+        img_mask_256_whole = dataset.load_image_mask(
+                new_256['filenames'][0][-9:-4], args_simplex['img_size'],
+                ano_dataset_256
+                )
+        img_mask_256_whole = img_mask_256_whole.to(device)
+        img_mask_256_whole = (img_mask_256_whole > 0).float()
+
+        new_128 = next(loader_128)
+        img_128_whole = new_128["image"].to(device)
+        img_128_whole = img_128_whole.reshape(img_128_whole.shape[1], 1, *args_GAN["img_size"])
+        img_mask_128_whole = dataset.load_image_mask(
+                new_128['filenames'][0][-9:-4], args_GAN['img_size'],
+                ano_dataset_128
+                )
+
+        for slice_number in range(4):
+            img = img_256_whole[slice_number, ...].reshape(1, 1, *args_simplex["img_size"])
+            img_mask = img_mask_256_whole[slice_number, ...].reshape(1, 1, *args_simplex["img_size"])
+            img_256.append(img_mask.detach().cpu().numpy().flatten())
+            # for slice_number in range(4):
+            unet_simplex.to(device)
+
+            output_simplex = diff_simplex.forward_backward(
+                    unet_simplex, img.reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence=None,
+                    t_distance=t_distance, denoise_fn=args_simplex["noise_fn"]
+                    )
+
+            unet_simplex.cpu()
+
+            mse_simplex = (img - output_simplex).square()
+            simplex_sqe.append(mse_simplex.detach().cpu().numpy().flatten())
+
+            fpr_simplex, tpr_simplex, threshold_simplex = evaluation.ROC_AUC(img_mask, mse_simplex)
+            simplex_AUC.append(evaluation.AUC_score(fpr_simplex, tpr_simplex))
+
+            unet_hybrid.to(device)
+
+            output_hybrid = diff_simplex.forward_backward(
+                    unet_hybrid, img.reshape(1, 1, *args_hybrid["img_size"]),
+                    see_whole_sequence=None,
+                    t_distance=t_distance, denoise_fn=args_hybrid["noise_fn"]
+                    )
+
+            unet_hybrid.cpu()
+
+            mse_hybrid = (img - output_hybrid).square()
+            hybrid_sqe.append(mse_hybrid.detach().cpu().numpy().flatten())
+
+            fpr_hybrid, tpr_hybrid, threshold_hybrid = evaluation.ROC_AUC(img_mask, mse_hybrid)
+            hybrid_AUC.append(evaluation.AUC_score(fpr_hybrid, tpr_hybrid))
+
+            unet_gauss.to(device)
+            output_gauss = diff_gauss.forward_backward(
+                    unet_gauss, img.reshape(1, 1, *args_simplex["img_size"]),
+                    see_whole_sequence=None,
+                    t_distance=t_distance, denoise_fn=args_gauss["noise_fn"]
+                    )
+
+            unet_gauss.cpu()
+
+            mse_gauss = (img - output_gauss).square()
+            gauss_sqe.append(mse_gauss.detach().cpu().numpy().flatten())
+            fpr_gauss, tpr_gauss, threshold_gauss = evaluation.ROC_AUC(img_mask, mse_gauss)
+            gauss_AUC.append(evaluation.AUC_score(fpr_gauss, tpr_gauss))
+
+            img = img_128_whole[slice_number, ...].reshape(1, 1, *args_GAN["img_size"]).to(device)
+            img_mask = img_mask_128_whole[slice_number, ...].to(device)
+            img_mask = (img_mask > 0).float().reshape(1, 1, *args_GAN["img_size"])
+            img_mask_center = img_mask[:, :,
+                              args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4,
+                              args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4]
+            img_center = img[:, :, args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4,
+                         args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4]
+            img_128.append(img_mask_center.detach().cpu().numpy().flatten())
+            input_cropped = input_cropped.to(device)
+            netG.to(device)
+            input_cropped.resize_(img.size()).copy_(img)
+            # recon_image = input_cropped.clone()
+            with torch.no_grad():
+                input_cropped[:, 0,
+                args_GAN['img_size'][0] // 4 + overlapSize:
+                args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4 - overlapSize,
+                args_GAN['img_size'][0] // 4 + overlapSize:
+                args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4 - overlapSize] \
+                    = 0
+
+            fake = netG(input_cropped)
+            # print(fake.shape, img.shape, recon_image.shape)
+            # recon_image.data[:, :, args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4,
+            # args_GAN['img_size'][0] // 4:args_GAN['inpaint_size'] + args_GAN['img_size'][0] // 4] = fake.data
+
+            mse_GAN = (img_center - fake).square()
+            GAN_sqe.append(mse_GAN.detach().cpu().numpy().flatten())
+            fpr_GAN, tpr_GAN, threshold_GAN = evaluation.ROC_AUC(img_mask_center, mse_GAN)
+            GAN_AUC.append(evaluation.AUC_score(fpr_GAN, tpr_GAN))
+
+            input_cropped.cpu()
+            netG.cpu()
+
+            # time_taken = time.time() - start_time
+            # remaining_epochs = 22 - i
+            # time_per_epoch = time_taken / (i + 1)
+            # hours = remaining_epochs * time_per_epoch / 3600
+            # mins = (hours % 1) * 60
+            # hours = int(hours)
+            #
+            # print(
+            #         f"file: {new_128['filenames'][0][-9:-4]}, "
+            #         f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+            #         f"remaining time: {hours}:{mins:02.0f}"
+            #         )
+
+            plt.plot(fpr_gauss, tpr_gauss, ":", label=f"gauss AUC={gauss_AUC[-1]:.2f}")
+            plt.plot(fpr_simplex, tpr_simplex, "-", label=f"simplex AUC={simplex_AUC[-1]:.2f}")
+            plt.plot(fpr_GAN, tpr_GAN, "-.", label=f"GAN AUC={GAN_AUC[-1]:.2f}")
+            plt.legend()
+            ax = plt.gca()
+            ax.set_ylim([0, 1])
+            ax.set_xlim([0, 1])
+            plt.savefig(
+                    f'./metrics/ROC_data_2/{new_128["filenames"][0][-9:-4]}'
+                    f'-{new_128["slices"][slice_number].cpu().item()}.png'
+                    )
+            plt.clf()
+            with open(
+                    f'./metrics/ROC_data_2/{new_256["filenames"][0][-9:-4]}'
+                    f'-{new_256["slices"][slice_number].cpu().item()}.csv',
+                    mode="w"
+                    ) as f:
+
+                for i in [fpr_simplex, tpr_simplex, threshold_simplex]:
+                    f.write(",".join([f"{j:.4f}" for j in i]))
+                    f.write("\n")
+                f.write("\n")
+
+                for i in [fpr_hybrid, tpr_hybrid, threshold_hybrid]:
+                    f.write(",".join([f"{j:.4f}" for j in i]))
+                    f.write("\n")
+                f.write("\n")
+
+                for i in [fpr_gauss, tpr_gauss, threshold_gauss]:
+                    f.write(",".join([f"{j:.4f}" for j in i]))
+                    f.write("\n")
+                f.write("\n")
+
+                for i in [fpr_GAN, tpr_GAN, threshold_GAN]:
+                    f.write(",".join([f"{j:.4f}" for j in i]))
+                    f.write("\n")
+                f.write("\n")
+
+    simplex_sqe = np.array(simplex_sqe)
+    gauss_sqe = np.array(gauss_sqe)
+    GAN_sqe = np.array(GAN_sqe)
+    hybrid_sqe = np.array(hybrid_sqe)
+    img_256 = np.array(img_256)
+    img_128 = np.array(img_128)
+
+    with open(f'./metrics/ROC_data_2/Square_Errors.csv', mode="w") as f:
+        for i in [simplex_sqe, gauss_sqe, GAN_sqe, img_256, img_128]:
+            f.write(",".join([f"{j:.4f}" for j in i.flatten()]))
+            f.write("\n")
+        f.write("\n")
+
+    fpr_simplex, tpr_simplex, _ = evaluation.ROC_AUC(img_256, simplex_sqe)
+    fpr_gauss, tpr_gauss, _ = evaluation.ROC_AUC(img_256, gauss_sqe)
+    fpr_GAN, tpr_GAN, _ = evaluation.ROC_AUC(img_128, GAN_sqe)
+    fpr_hybrid, tpr_hybrid, _ = evaluation.ROC_AUC(img_256, hybrid_sqe)
+
+    plt.plot(fpr_gauss, tpr_gauss, ":", label=f"Gaussian AUC={evaluation.AUC_score(fpr_gauss, tpr_gauss):.3f}")
+    plt.plot(
+            fpr_simplex, tpr_simplex, "-",
+            label=f"Simplex $\mathcal{{L}}_{{simple}}$ AUC={evaluation.AUC_score(fpr_simplex, tpr_simplex):.3f}"
+            )
+    plt.plot(
+            fpr_hybrid, tpr_hybrid, "-", label=f"Simplex $\mathcal{{L}}_{{hybrid}}$ AUC"
+                                               f"={evaluation.AUC_score(fpr_hybrid, tpr_hybrid):.3f}"
+            )
+    plt.plot(
+            fpr_GAN, tpr_GAN, "-.",
+            label=f"Adversarial Context Encoder AUC={evaluation.AUC_score(fpr_GAN, tpr_GAN):.3f}"
+            )
+    plt.legend()
+    ax = plt.gca()
+    ax.set_ylim([0, 1])
+    ax.set_xlim([0, 1])
+    plt.ylabel("True Positive Rate")
+    plt.xlabel("False Positive Rate")
+    plt.savefig(f'./metrics/ROC_data_2/Overall.png')
+    plt.clf()
+
+    print(f"Simplex AUC {np.mean(simplex_AUC)} +- {np.std(simplex_AUC)}")
+    print(f"Simplex hybrid AUC {np.mean(hybrid_AUC)} +- {np.std(hybrid_AUC)}")
+    print(f"Gauss AUC {np.mean(gauss_AUC)} +- {np.std(gauss_AUC)}")
+    print(f"CE AUC {np.mean(GAN_AUC)} +- {np.std(GAN_AUC)}")
 
 
 def unet_anomalous():
@@ -572,16 +869,24 @@ def gan_anomalous():
             img_mask = img_mask_whole[slice_number, ...].to(device)
             img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
 
-            print(input_cropped.device, netG.device, img.device)
-            recon_image = ce_sliding_window(img, netG, input_cropped, args)
+            if args['type'] == 'sliding':
+                recon_image = ce_sliding_window(img, netG, input_cropped, args)
+            else:
+                input_cropped.resize_(img.size()).copy_(img)
+                recon_image = input_cropped.clone()
+                with torch.no_grad():
+                    input_cropped[:, 0,
+                    args['img_size'][0] // 4 + overlapSize:
+                    args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize,
+                    args['img_size'][0] // 4 + overlapSize:
+                    args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize] \
+                        = 0
 
-            evaluation.heatmap(
-                    img, recon_image.to(device).reshape(1, *args["img_size"]),
-                    img_mask,
-                    f"./diffusion-training-images/ARGS={args['arg_num']}/{new['filenames'][0][-9:-4]}"
-                    f"-{new['slices'][slice_number].cpu().item()}.png",
-                    save=True
-                    )
+                fake = netG(input_cropped)
+
+                recon_image.data[:, :, args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4,
+                args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4] = fake.data
+
             mse = (img - recon_image).square()
             mse = (mse > 0.5).float()
             dice_data.append(
@@ -594,7 +899,6 @@ def gan_anomalous():
             recall.append(evaluation.recall(img_mask, mse).detach().cpu().numpy())
             IOU.append(evaluation.IoU(img_mask, mse))
             FPR.append(evaluation.FPR(img_mask, mse).detach().cpu().numpy())
-
             plt.close('all')
 
         time_taken = time.time() - start_time
@@ -618,8 +922,101 @@ def gan_anomalous():
         print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
         print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
         print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
+        print("\n")
 
-    print("\n\n")
+    print()
+    print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
+    print(
+            f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
+            f" {np.std(ssim_data)}"
+            )
+    print(f"Precision: {np.mean(precision)} +- {np.std(precision)}")
+    print(f"Recall: {np.mean(recall)} +- {np.std(recall)}")
+    print(f"FPR: {np.mean(FPR)} +- {np.std(FPR)}")
+    print(f"IOU: {np.mean(IOU)} +- {np.std(IOU)}")
+
+    dice_data = []
+    ssim_data = []
+    IOU = []
+    precision = []
+    recall = []
+    FPR = []
+    start_time = time.time()
+    for i in range(len(ano_dataset)):
+
+        new = next(loader)
+        image = new["image"].reshape(new["image"].shape[1], 1, *args["img_size"])
+
+        img_mask_whole = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
+        for slice_number in range(4):
+            try:
+                os.makedirs(
+                        f'./diffusion-training-images/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
+                        f'{new["slices"][slice_number].numpy()[0]}'
+                        )
+            except OSError:
+                pass
+            img = image[slice_number, ...].to(device).reshape(1, 1, *args["img_size"])
+            img_mask = img_mask_whole[slice_number, ...].to(device)
+            img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
+
+            img_center = img[:, :, args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4,
+                         args['img_size'][0] // 4: args['inpaint_size'] + args['img_size'][0] // 4]
+            img_mask_center = img_mask[:, :, args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4,
+                              args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4]
+
+            input_cropped.resize_(img.size()).copy_(img)
+            with torch.no_grad():
+                input_cropped[:, 0,
+                args['img_size'][0] // 4 + overlapSize:
+                args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize,
+                args['img_size'][0] // 4 + overlapSize:
+                args['inpaint_size'] + args['img_size'][0] // 4 - overlapSize] \
+                    = 0
+
+            fake = netG(input_cropped)
+
+            mse = (img_center - fake).square()
+            mse = (mse > 0.5).float()
+            dice_data.append(
+                    evaluation.dice_coeff(img_center, fake, img_mask_center, mse=mse).detach().cpu().numpy()
+                    )
+            ssim_data.append(
+                    evaluation.SSIM(
+                            img_center.reshape(args["inpaint_size"], args["inpaint_size"]),
+                            fake.reshape(args["inpaint_size"], args["inpaint_size"])
+                            )
+                    )
+            precision.append(evaluation.precision(img_mask_center, mse).detach().cpu().numpy())
+            recall.append(evaluation.recall(img_mask_center, mse).detach().cpu().numpy())
+            IOU.append(evaluation.IoU(img_mask_center, mse))
+            FPR.append(evaluation.FPR(img_mask_center, mse).detach().cpu().numpy())
+            plt.close('all')
+
+        time_taken = time.time() - start_time
+        remaining_epochs = 22 - i
+        time_per_epoch = time_taken / (i + 1)
+        hours = remaining_epochs * time_per_epoch / 3600
+        mins = (hours % 1) * 60
+        hours = int(hours)
+
+        print(
+                f"file: {new['filenames'][0][-9:-4]}, "
+                f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+                f"remaining time: {hours}:{mins:02.0f}"
+                )
+
+        print(f"Dice coefficient: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
+        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +-{np.std(ssim_data[-4:])}")
+        print(f"Dice: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
+        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +- {np.std(ssim_data[-4:])}")
+        print(f"Precision: {np.mean(precision[-4:])} +- {np.std(precision[-4:])}")
+        print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
+        print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
+        print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
+        print("\n")
+
+    print()
     print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
     print(
             f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
@@ -632,30 +1029,37 @@ def gan_anomalous():
 
 
 def ce_sliding_window(img, netG, input_cropped, args):
+    input_cropped.resize_(img.size()).copy_(img)
     recon_image = input_cropped.clone()
-    for center_offset_y in range(0, 200, args['inpaint_size']):
+    for center_offset_y in np.arange(0, 97, args['inpaint_size']):
 
-        for center_offset_x in range(0, 200, args['inpaint_size']):
+        for center_offset_x in np.arange(0, 97, args['inpaint_size']):
             with torch.no_grad():
                 input_cropped.resize_(img.size()).copy_(img)
                 input_cropped[:, 0,
-                16 + center_offset_x + args['overlap']:16 + args['inpaint_size'] + center_offset_x - args['overlap'],
-                16 + center_offset_y + args['overlap']:16 + args['inpaint_size'] + center_offset_y - args[
+                center_offset_x + args['overlap']: args['inpaint_size'] + center_offset_x - args['overlap'],
+                center_offset_y + args['overlap']: args['inpaint_size'] + center_offset_y - args[
                     'overlap']] = 0
 
             fake = netG(input_cropped)
 
-            recon_image.data[:, :, 16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x,
-            16 + center_offset_x:args['inpaint_size'] + 16 + center_offset_x] = fake.data
+            recon_image.data[:, :, center_offset_x:args['inpaint_size'] + center_offset_x,
+            center_offset_y:args['inpaint_size'] + center_offset_y] = fake.data
 
     return recon_image
 
 
 if __name__ == "__main__":
+    from matplotlib import font_manager
+
+    font_path = "./times new roman.ttf"
+    font_manager.fontManager.addfont(font_path)
+    prop = font_manager.FontProperties(fname=font_path)
+
+    plt.rcParams['font.family'] = 'sans-serif'
+    plt.rcParams['font.sans-serif'] = prop.get_name()
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # anomalous_dice_calculation()
-    # anomalous_validation_1()
     import sys
 
     if str(sys.argv[1]) == "100":
@@ -663,6 +1067,15 @@ if __name__ == "__main__":
     elif str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
             "104":
         gan_anomalous()
+    elif str(sys.argv[1]) == "200":
+        roc_data()
+    elif str(sys.argv[1]) == "500":
+        sys.argv[1] = "26"
+        anomalous_dice_calculation()
+        sys.argv[1] = "28"
+        anomalous_dice_calculation()
+        sys.argv[1] = "103"
+        gan_anomalous()
     else:
-        graph_data()
+        # graph_data()
         anomalous_dice_calculation()
