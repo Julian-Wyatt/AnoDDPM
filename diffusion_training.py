@@ -1,7 +1,5 @@
 import collections
 import copy
-import json
-import os
 import sys
 import time
 from random import seed
@@ -32,7 +30,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     :return: Trained model and tested
     """
 
-    in_channels = 3 if args["dataset"].lower() == "cifar" else 1
+    in_channels = 3 if args["dataset"].lower() == "carpet" else 1
 
     model = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
@@ -44,7 +42,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
     diffusion = GaussianDiffusionModel(
             args['img_size'], betas, loss_weight=args['loss_weight'],
-            loss_type=args['loss-type'], noise=args["noise_fn"]
+            loss_type=args['loss-type'], noise=args["noise_fn"], img_channels=in_channels
             )
 
     if resume:
@@ -86,14 +84,15 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
         for i in iters:
             data = next(training_dataset_loader)
-            if args["dataset"] != "cifar":
-                x = data["image"]
-                x = x.to(device)
-            else:
+            if args["dataset"] == "cifar" or args["dataset"] == "carpet":
                 # cifar outputs [data,class]
                 x = data[0].to(device)
+            else:
+                x = data["image"]
+                x = x.to(device)
 
             loss, estimates = diffusion.p_loss(model, x, args)
+
             noisy, est = estimates[1], estimates[2]
             optimiser.zero_grad()
             loss.backward()
@@ -234,9 +233,9 @@ def training_outputs(diffusion, x, est, noisy, epoch, row_size, ema, args, save_
         if epoch % 500 == 0:
             plt.rcParams['figure.dpi'] = 200
             if epoch % 1000 == 0:
-                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'])
+                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'] // 2, denoise_fn="noise_fn")
             else:
-                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'] // 2)
+                out = diffusion.forward_backward(ema, x, "half", args['sample_distance'] // 4, denoise_fn="noise_fn")
             imgs = [[ax.imshow(gridify_output(x, row_size), animated=True)] for x in out]
             ani = animation.ArtistAnimation(
                     fig, imgs, interval=50, blit=True,
@@ -314,6 +313,9 @@ def main():
                                                             dataset.load_CIFAR10(args, False)
         training_dataset_loader = dataset.cycle(training_dataset_loader_)
         testing_dataset_loader = dataset.cycle(testing_dataset_loader_)
+    elif args["dataset"].lower() == "carpet":
+        training_dataset, training_dataset_loader = dataset.init_MVTec("./DATASETS/CARPET/", args)
+        testing_dataset, testing_dataset_loader = dataset.init_MVTec("./DATASETS/CARPET_Ano", args)
     else:
         # load NFBS dataset
         training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)

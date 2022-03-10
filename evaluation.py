@@ -87,14 +87,6 @@ def AUC_score(fpr, tpr):
     return auc(fpr, tpr)
 
 
-def FID():
-    pass
-
-
-def sFID():
-    pass
-
-
 def testing(testing_dataset_loader, diffusion, args, ema, model):
     """
     Samples videos on test set & calculates some metrics such as PSNR & VLB.
@@ -124,12 +116,12 @@ def testing(testing_dataset_loader, diffusion, args, ema, model):
     plt.rcParams['figure.dpi'] = 200
     for i in [*range(100, args['sample_distance'], 100)]:
         data = next(testing_dataset_loader)
-        if args["dataset"] != "cifar":
-            x = data["image"]
-            x = x.to(device)
-        else:
+        if args["dataset"] == "cifar" or args["dataset"] == "carpet":
             # cifar outputs [data,class]
             x = data[0].to(device)
+        else:
+            x = data["image"]
+            x = x.to(device)
 
         row_size = min(5, args['Batch_Size'])
 

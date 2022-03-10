@@ -94,31 +94,40 @@ def discretised_gaussian_log_likelihood(x, means, log_scales):
     return log_probs
 
 
-def generate_simplex_noise(Simplex_instance, x, t, random_param=False, octave=6, persistence=0.8, frequency=64):
-    Simplex_instance.newSeed()
-    if random_param:
-        param = random.choice(
-                [(2, 0.6, 16), (6, 0.6, 32), (7, 0.7, 32), (10, 0.8, 64), (5, 0.8, 16), (4, 0.6, 16), (1, 0.6, 64),
-                 (7, 0.8, 128), (6, 0.9, 64), (2, 0.85, 128), (2, 0.85, 64), (2, 0.85, 32), (2, 0.85, 16), (2, 0.85, 8),
-                 (2, 0.85, 4), (2, 0.85, 2), (1, 0.85, 128), (1, 0.85, 64), (1, 0.85, 32), (1, 0.85, 16), (1, 0.85, 8),
-                 (1, 0.85, 4), (1, 0.85, 2), ]
-                )
-        return torch.unsqueeze(
+def generate_simplex_noise(
+        Simplex_instance, x, t, random_param=False, octave=6, persistence=0.8, frequency=64,
+        in_channels=1
+        ):
+    noise = torch.empty(x.shape).to(x.device)
+    for i in range(in_channels):
+        Simplex_instance.newSeed()
+        if random_param:
+            param = random.choice(
+                    [(2, 0.6, 16), (6, 0.6, 32), (7, 0.7, 32), (10, 0.8, 64), (5, 0.8, 16), (4, 0.6, 16), (1, 0.6, 64),
+                     (7, 0.8, 128), (6, 0.9, 64), (2, 0.85, 128), (2, 0.85, 64), (2, 0.85, 32), (2, 0.85, 16),
+                     (2, 0.85, 8),
+                     (2, 0.85, 4), (2, 0.85, 2), (1, 0.85, 128), (1, 0.85, 64), (1, 0.85, 32), (1, 0.85, 16),
+                     (1, 0.85, 8),
+                     (1, 0.85, 4), (1, 0.85, 2), ]
+                    )
+            noise[:, i, ...] = torch.unsqueeze(
+                    torch.from_numpy(
+                            Simplex_instance.rand_2d_octaves(
+                                    x.shape[-2:], param[0], param[1],
+                                    param[2]
+                                    )
+                            ).to(x.device), 0
+                    ).repeat(x.shape[0], 1, 1, 1)
+        noise[:, i, ...] = torch.unsqueeze(
                 torch.from_numpy(
-                        Simplex_instance.rand_3d_fixed_T_octaves(
-                                x.shape[-2:], t.detach().cpu().numpy(), param[0], param[1],
-                                param[2]
+                        Simplex_instance.rand_2d_octaves(
+                                x.shape[-2:], octave,
+                                persistence, frequency
                                 )
                         ).to(x.device), 0
                 ).repeat(x.shape[0], 1, 1, 1)
-    return torch.unsqueeze(
-            torch.from_numpy(
-                    Simplex_instance.rand_3d_fixed_T_octaves(
-                            x.shape[-2:], t.detach().cpu().numpy(), octave,
-                            persistence, frequency
-                            )
-                    ).to(x.device), 0
-            ).repeat(x.shape[0], 1, 1, 1)
+
+    return noise
 
 
 def random_noise(Simplex_instance, x, t):
@@ -154,11 +163,11 @@ class GaussianDiffusionModel:
         else:
             self.simplex = Simplex_CLASS()
             if noise == "simplex_randParam":
-                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, True)
+                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, True, in_channels=img_channels)
             elif noise == "random":
                 self.noise_fn = lambda x, t: random_noise(self.simplex, x, t)
             else:
-                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False)
+                self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, in_channels=img_channels)
 
         self.img_size = img_size
         self.img_channels = img_channels
@@ -390,6 +399,7 @@ class GaussianDiffusionModel:
         # noise = torch.randn_like(x)
 
         noise = self.noise_fn(x_0, t).float()
+
         x_t = self.sample_q(x_0, t, noise)
         estimate_noise = model(x_t, t)
         loss = {}
