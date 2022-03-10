@@ -23,6 +23,101 @@ def cycle(iterable):
             yield x
 
 
+def make_pngs_anogan():
+    dir = {
+        "Train":     "./DATASETS/Train", "Test": "./DATASETS/Test",
+        "Anomalous": "./DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1"
+        }
+    slices = {
+        "17904": range(165, 205), "18428": range(177, 213), "18582": range(160, 190), "18638": range(160, 212),
+        "18675": range(140, 200), "18716": range(135, 190), "18756": range(150, 205), "18863": range(130, 190),
+        "18886": range(120, 180), "18975": range(170, 194), "19015": range(158, 195), "19085": range(155, 195),
+        "19275": range(184, 213), "19277": range(158, 209), "19357": range(158, 210), "19398": range(164, 200),
+        "19423": range(142, 200), "19567": range(160, 200), "19628": range(147, 210), "19691": range(155, 200),
+        "19723": range(140, 170), "19849": range(150, 180)
+        }
+    center_crop = 235
+    import os
+    try:
+        os.makedirs("./DATASETS/AnoGAN")
+    except OSError:
+        pass
+    # for d_set in ["Train", "Test"]:
+    #     try:
+    #         os.makedirs(f"./DATASETS/AnoGAN/{d_set}")
+    #     except OSError:
+    #         pass
+    #
+    #     files = os.listdir(dir[d_set])
+    #
+    #     for volume_name in files:
+    #         try:
+    #             volume = np.load(f"{dir[d_set]}/{volume_name}/{volume_name}.npy")
+    #         except (FileNotFoundError, NotADirectoryError) as e:
+    #             continue
+    #         for slice_idx in range(40, 120):
+    #             image = volume[:, slice_idx:slice_idx + 1, :].reshape(256, 192).astype(np.float32)
+    #             image = (image * 255).astype(np.int32)
+    #             empty_image = np.zeros((256, center_crop))
+    #             empty_image[:, 21:213] = image
+    #             image = empty_image
+    #             center = (image.shape[0] / 2, image.shape[1] / 2)
+    #
+    #             x = center[1] - center_crop / 2
+    #             y = center[0] - center_crop / 2
+    #             image = image[int(y):int(y + center_crop), int(x):int(x + center_crop)]
+    #             image = cv2.resize(image, (64, 64))
+    #             cv2.imwrite(f"./DATASETS/AnoGAN/{d_set}/{volume_name}-slice={slice_idx}.png", image)
+
+    try:
+        os.makedirs(f"./DATASETS/AnoGAN/Anomalous")
+    except OSError:
+        pass
+    try:
+        os.makedirs(f"./DATASETS/AnoGAN/Anomalous-mask")
+    except OSError:
+        pass
+    files = os.listdir(f"{dir['Anomalous']}/raw_cleaned")
+    center_crop = (175, 240)
+    for volume_name in files:
+        try:
+            volume = np.load(f"{dir['Anomalous']}/raw_cleaned/{volume_name}")
+            volume_mask = np.load(f"{dir['Anomalous']}/mask_cleaned/{volume_name}")
+        except (FileNotFoundError, NotADirectoryError) as e:
+            continue
+        temp_range = slices[volume_name[:-4]]
+        for slice_idx in np.linspace(temp_range.start + 5, temp_range.stop - 5, 4).astype(np.uint16):
+            image = volume[slice_idx, ...].reshape(volume.shape[1], volume.shape[2]).astype(np.float32)
+            image = (image * 255).astype(np.int32)
+            empty_image = np.zeros((max(volume.shape[1], center_crop[0]), max(volume.shape[2], center_crop[1])))
+
+            empty_image[9:165, :] = image
+            image = empty_image
+            center = (image.shape[0] / 2, image.shape[1] / 2)
+
+            x = center[1] - center_crop[1] / 2
+            y = center[0] - center_crop[0] / 2
+            image = image[int(y):int(y + center_crop[0]), int(x):int(x + center_crop[1])]
+            image = cv2.resize(image, (64, 64))
+            cv2.imwrite(f"./DATASETS/AnoGAN/Anomalous/{volume_name}-slice={slice_idx}.png", image)
+
+            image = volume_mask[slice_idx, ...].reshape(volume.shape[1], volume.shape[2]).astype(np.float32)
+            image = (image * 255).astype(np.int32)
+            empty_image = np.zeros((max(volume.shape[1], center_crop[0]), max(volume.shape[2], center_crop[1])))
+
+            empty_image[9:165, :] = image
+            image = empty_image
+            center = (image.shape[0] / 2, image.shape[1] / 2)
+
+            x = center[1] - center_crop[1] / 2
+            y = center[0] - center_crop[0] / 2
+            image = image[int(y):int(y + center_crop[0]), int(x):int(x + center_crop[1])]
+            image = cv2.resize(image, (64, 64))
+            cv2.imwrite(f"./DATASETS/AnoGAN/Anomalous-mask/{volume_name}-slice={slice_idx}.png", image)
+
+
+
+
 ############ Dataset animation creation ###########
 
 
@@ -348,6 +443,20 @@ def init_dataset_loader(mri_dataset, args, shuffle=True):
     return dataset_loader
 
 
+def init_MVTec(dir, args):
+    tfs = transforms.Compose(
+            [
+                # transforms.ToPILImage(),
+                transforms.Resize(args['img_size'], transforms.InterpolationMode.BILINEAR),
+                transforms.ToTensor(),
+                transforms.Normalize((0.5), (0.5))
+                ]
+            )
+    d_set = datasets.ImageFolder(dir, transform=tfs)
+    loader = init_dataset_loader(d_set, args)
+    return d_set, loader
+
+
 class MRIDataset(Dataset):
     """Healthy MRI dataset."""
 
@@ -514,7 +623,7 @@ class AnomalousMRIDataset(Dataset):
 
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             output = torch.empty(4, *self.img_size)
-            slices = [int(k) for k in np.linspace(temp_range.start + 5, temp_range.stop - 5, 4)]
+            slices = np.linspace(temp_range.start + 5, temp_range.stop - 5, 4).astype(np.uint16)
             counter = 0
             for i in slices:
                 temp = image[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
@@ -609,5 +718,6 @@ def load_image_mask(file, img_size, Ano_Dataset_Class):
 
 if __name__ == "__main__":
     # load_datasets_for_test()
-    get_segmented_labels(True)
+    # get_segmented_labels(True)
     # main(True)
+    make_pngs_anogan()
