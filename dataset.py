@@ -539,6 +539,7 @@ class DAGM(Dataset):
             image = self.transform(sample["image"])
             if self.anomalous:
                 sample["mask"] = self.transform(sample["mask"])
+                sample["mask"] = (sample["mask"] > 0).float()
         sample["image"] = image.reshape(1, *self.img_size)
 
         return sample
@@ -657,7 +658,10 @@ class AnomalousMRIDataset(Dataset):
         self.slice_selection = slice_selection
 
     def __len__(self):
-        return len(self.filenames)
+        if self.slice_selection == "iterateKnown_restricted":
+            return len(self.filenames) * 4
+        else:
+            return len(self.filenames)
 
     def __getitem__(self, idx):
         if torch.is_tensor(idx):
@@ -712,9 +716,10 @@ class AnomalousMRIDataset(Dataset):
                     temp_mask = self.transform(temp_mask)
                 output[i, ...] = temp
                 output_mask[i, ...] = temp_mask
+
             image = output
             sample["slices"] = temp_range
-            sample["mask"] = output_mask
+            sample["mask"] = (output_mask > 0).float()
 
         elif self.slice_selection == "iterateKnown_restricted":
 
