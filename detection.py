@@ -153,7 +153,7 @@ def anomalous_validation_1():
                 )
 
 
-def anomalous_dice_calculation():
+def anomalous_metric_calculation():
     """
     Iterates over 4 anomalous slices for each Volume, returning diffused video for it,
     the heatmap of that & detection method (A&B) or C
@@ -173,24 +173,15 @@ def anomalous_dice_calculation():
     unet.load_state_dict(output["ema"])
     unet.to(device)
     unet.eval()
-    ano_dataset = dataset.AnomalousMRIDataset(
-            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
-            slice_selection="iterateKnown_restricted", resized=False
-            )
-    loader = dataset.init_dataset_loader(ano_dataset, args)
+    if args["dataset"].lower() == "carpet":
+        d_set = dataset.DAGM("./DATASETS/CARPET/Class1", True)
+    else:
+        d_set = dataset.AnomalousMRIDataset(
+                ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
+                slice_selection="iterateKnown_restricted", resized=False
+                )
+    loader = dataset.init_dataset_loader(d_set, args)
     plt.rcParams['figure.dpi'] = 200
-
-    try:
-        os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous')
-    except OSError:
-        pass
-
-    # make folder for each anomalous volume
-    for i in ano_dataset.slices.keys():
-        try:
-            os.makedirs(f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{i}')
-        except OSError:
-            pass
 
     dice_data = []
     ssim_data = []
@@ -198,90 +189,86 @@ def anomalous_dice_calculation():
     precision = []
     recall = []
     FPR = []
+    AUC_scores = []
+
     start_time = time.time()
-    for i in range(len(ano_dataset)):
+    for i in range(len(d_set)):
 
-        new = next(loader)
-        image = new["image"].to(device)
-        image = image.reshape(image.shape[1], 1, *args["img_size"])
-        img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
-        img_mask = img_mask.to(device)
-        img_mask_whole = (img_mask > 0).float()
-        for slice_number in range(4):
-            img = image[slice_number, ...].to(device).reshape(1, 1, *args["img_size"])
-            img_mask = img_mask_whole[slice_number, ...].to(device)
-            img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
-            try:
-                os.makedirs(
-                        f'./diffusion-videos/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
-                        f'{new["slices"][slice_number].numpy()[0]}'
-                        )
-            except OSError:
-                pass
-            output = diff.forward_backward(
-                    unet, img,
-                    see_whole_sequence=None,
-                    t_distance=250, denoise_fn=args["noise_fn"]
-                    )
+        if args["dataset"].lower() != "carpet":
+            if i % 4 == 0:
+                image_whole = next(loader)
+                image_whole["image"].reshape(image_whole["image"].shape[1], 1, *args["img_size"])
+                image_whole["mask"].reshape(image_whole["mask"].shape[1], 1, *args["img_size"])
+            image = image_whole["image"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
+            mask = image_whole["mask"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
+        else:
+            new = next(loader)
+            image = new["image"].to(device)
+            mask = new["mask"].to(device)
 
-            evaluation.heatmap(
-                    img, output.to(device),
-                    img_mask,
-                    f"./diffusion-training-images/ARGS={args['arg_num']}/{new['filenames'][0][-9:-4]}"
-                    f"-{new['slices'][slice_number].cpu().item()}.png",
-                    save=False
-                    )
-            mse = (img - output).square()
-            mse = (mse > 0.5).float()
-            # print(img.shape, output.shape, img_mask.shape, mse.shape)
-            dice_data.append(
-                    evaluation.dice_coeff(
-                            img, output.to(device),
-                            img_mask, mse=mse
-                            ).cpu().item()
-                    )
-            ssim_data.append(
-                    evaluation.SSIM(img.reshape(*args["img_size"]), output.reshape(*args["img_size"]))
-                    )
-            precision.append(evaluation.precision(img_mask, mse).cpu().numpy())
-            recall.append(evaluation.recall(img_mask, mse).cpu().numpy())
-            IOU.append(evaluation.IoU(img_mask, mse))
-            FPR.append(evaluation.FPR(img_mask, mse).cpu().numpy())
-            plt.close('all')
-
-        time_taken = time.time() - start_time
-        remaining_epochs = 22 - i
-        time_per_epoch = time_taken / (i + 1)
-        hours = remaining_epochs * time_per_epoch / 3600
-        mins = (hours % 1) * 60
-        hours = int(hours)
-
-        print(
-                f"file: {new['filenames'][0][-9:-4]}, "
-                f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
-                f"remaining time: {hours}:{mins:02.0f}"
+        output = diff.forward_backward(
+                unet, image,
+                see_whole_sequence=None,
+                t_distance=250, denoise_fn=args["noise_fn"]
                 )
 
-        print(f"Dice coefficient: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
-        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +-{np.std(ssim_data[-4:])}")
-        print(f"Dice: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
-        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +- {np.std(ssim_data[-4:])}")
-        print(f"Precision: {np.mean(precision[-4:])} +- {np.std(precision[-4:])}")
-        print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
-        print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
-        print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
-        print("\n")
+        mse = (image - output).square()
+        fpr_simplex, tpr_simplex, _ = evaluation.ROC_AUC(mask, mse)
+        AUC_scores.append(evaluation.AUC_score(fpr_simplex, tpr_simplex))
+        mse = (mse > 0.5).float()
+        # print(img.shape, output.shape, img_mask.shape, mse.shape)
+        dice_data.append(
+                evaluation.dice_coeff(
+                        image, output.to(device),
+                        mask, mse=mse
+                        ).cpu().item()
+                )
+        ssim_data.append(
+                evaluation.SSIM(image.reshape(*args["img_size"]), output.reshape(*args["img_size"]))
+                )
+        precision.append(evaluation.precision(mask, mse).cpu().numpy())
+        recall.append(evaluation.recall(mask, mse).cpu().numpy())
+        IOU.append(evaluation.IoU(mask, mse))
+        FPR.append(evaluation.FPR(mask, mse).cpu().numpy())
+        plt.close('all')
+
+        if i % 8 == 0:
+            time_taken = time.time() - start_time
+            remaining_epochs = len(d_set) - i
+            time_per_epoch = time_taken / (i + 1)
+            hours = remaining_epochs * time_per_epoch / 3600
+            mins = (hours % 1) * 60
+            hours = int(hours)
+
+            print(
+                    f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
+                    f"remaining time: {hours}:{mins:02.0f}"
+                    )
+
+        if i % 4 == 0 and args["dataset"].lower() != "carpet":
+            print(f"file: {new['filenames'][0][-9:-4]}")
+            print(f"Dice coefficient: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
+            print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +-{np.std(ssim_data[-4:])}")
+            print(f"Dice: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
+            print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +- {np.std(ssim_data[-4:])}")
+            print(f"Precision: {np.mean(precision[-4:])} +- {np.std(precision[-4:])}")
+            print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
+            print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
+            print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
+            print("\n")
 
     print()
-    print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
-    print(
-            f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
-            f" {np.std(ssim_data)}"
-            )
+    print("Overall: ")
+    print(f"Dice coefficient: {np.mean(dice_data)} +- {np.std(dice_data)}")
+    print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data)} +- {np.std(ssim_data)}")
     print(f"Precision: {np.mean(precision)} +- {np.std(precision)}")
     print(f"Recall: {np.mean(recall)} +- {np.std(recall)}")
     print(f"FPR: {np.mean(FPR)} +- {np.std(FPR)}")
     print(f"IOU: {np.mean(IOU)} +- {np.std(IOU)}")
+    with open(f"./metrics/args{args['arg_num']}.csv", mode="w") as f:
+        f.write("dice,ssim,iou,precision,recall,fpr,auc\n")
+        for METRIC in [dice_data, ssim_data, IOU, precision, recall, FPR, AUC_scores]:
+            f.write(f"{np.mean(METRIC):.4f} +- {np.std(METRIC):.4f},")
 
 
 def graph_data():
@@ -315,10 +302,12 @@ def graph_data():
         os.makedirs(f'./metrics/ARGS={args["arg_num"]}')
     except OSError:
         pass
-    t_range = np.linspace(0, 999, 200).astype(np.int32)
+    t_range = np.linspace(0, 999, 1000).astype(np.int32)
+    # t_range = np.linspace(0, 999, 1).astype(np.int32)
 
     start_time = time.time()
-    for i in range(len(ano_dataset)):
+    files_to_complete = defaultdict(str, {"19691": False, "18756": False})
+    for i in range(2):
 
         dice_data = []
         ssim_data = []
@@ -326,8 +315,11 @@ def graph_data():
         recall = []
         IOU = []
         FPR = []
-
         new = next(loader)
+
+        while (new['filenames'][0][-9:-4] not in files_to_complete) or (files_to_complete[new['filenames'][0][
+                                                                                          -9:-4]] == True):
+            new = next(loader)
         img = new["image"].to(device)
         img = img.reshape(img.shape[1], 1, *args["img_size"])
         img_mask = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
@@ -357,19 +349,19 @@ def graph_data():
             IOU.append(evaluation.IoU(img_mask, mse))
             FPR.append(evaluation.FPR(img_mask, mse).cpu().numpy())
 
-            if t in [0, 100, 200, 301, 401, 502, 602, 702, 803, 903, 999]:
+            if t in [0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 999]:
                 print(t, dice_data[-1], ssim_data[-1], precision[-1], recall[-1], IOU[-1])
 
-            plt.plot(t_range[:len(dice_data)], dice_data, label="dice")
-            plt.plot(t_range[:len(dice_data)], IOU, label="IOU")
-            plt.plot(t_range[:len(dice_data)], precision, label="precision")
-            plt.plot(t_range[:len(dice_data)], recall, label="recall")
-            plt.legend(loc="upper right")
-            ax = plt.gca()
-            ax.set_ylim([0, 1])
-            plt.savefig(f'./metrics/ARGS={args["arg_num"]}/{new["filenames"][0][-9:-4]}.png')
-            plt.clf()
-
+                plt.plot(t_range[:len(dice_data)], dice_data, label="dice")
+                plt.plot(t_range[:len(dice_data)], IOU, label="IOU")
+                plt.plot(t_range[:len(dice_data)], precision, label="precision")
+                plt.plot(t_range[:len(dice_data)], recall, label="recall")
+                plt.legend(loc="upper right")
+                ax = plt.gca()
+                ax.set_ylim([0, 1])
+                plt.savefig(f'./metrics/ARGS={args["arg_num"]}/{new["filenames"][0][-9:-4]}.png')
+                plt.clf()
+        files_to_complete[new['filenames'][0][-9:-4]] = True
         time_taken = time.time() - start_time
         remaining_epochs = 22 - i
         time_per_epoch = time_taken / (i + 1)
@@ -408,10 +400,15 @@ def graph_data():
         plt.clf()
         with open(f'./metrics/ARGS={args["arg_num"]}/{new["filenames"][0][-9:-4]}.csv', mode="w") as f:
 
-            f.write(",".join([f"{i:04}" for i in t_range]))
+            f.write(",".join(["timestep", "Dice", "SSIM", "IOU", "Precision", "Recall", "FPR"]))
             f.write("\n")
-            for i in [dice_data, ssim_data, IOU, precision, recall, FPR]:
-                f.write(",".join([f"{j:.4f}" for j in i]))
+            for i in range(1000):
+                f.write(
+                        f"{i:04}," + ",".join(
+                                [f"{j:.4f}" for j in [dice_data[i], ssim_data[i], IOU[i], precision[i],
+                                                      recall[i], FPR[i]]]
+                                )
+                        )
                 f.write("\n")
 
 
@@ -605,19 +602,6 @@ def roc_data():
             input_cropped.cpu()
             netG.cpu()
 
-            # time_taken = time.time() - start_time
-            # remaining_epochs = 22 - i
-            # time_per_epoch = time_taken / (i + 1)
-            # hours = remaining_epochs * time_per_epoch / 3600
-            # mins = (hours % 1) * 60
-            # hours = int(hours)
-            #
-            # print(
-            #         f"file: {new_128['filenames'][0][-9:-4]}, "
-            #         f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
-            #         f"remaining time: {hours}:{mins:02.0f}"
-            #         )
-
             plt.plot(fpr_gauss, tpr_gauss, ":", label=f"gauss AUC={gauss_AUC[-1]:.2f}")
             plt.plot(fpr_simplex, tpr_simplex, "-", label=f"simplex AUC={simplex_AUC[-1]:.2f}")
             plt.plot(fpr_GAN, tpr_GAN, "-.", label=f"GAN AUC={GAN_AUC[-1]:.2f}")
@@ -626,35 +610,10 @@ def roc_data():
             ax.set_ylim([0, 1])
             ax.set_xlim([0, 1])
             plt.savefig(
-                    f'./metrics/ROC_data_2/{new_128["filenames"][0][-9:-4]}'
+                    f'./metrics/ROC_data_3/{new_128["filenames"][0][-9:-4]}'
                     f'-{new_128["slices"][slice_number].cpu().item()}.png'
                     )
             plt.clf()
-            with open(
-                    f'./metrics/ROC_data_2/{new_256["filenames"][0][-9:-4]}'
-                    f'-{new_256["slices"][slice_number].cpu().item()}.csv',
-                    mode="w"
-                    ) as f:
-
-                for i in [fpr_simplex, tpr_simplex, threshold_simplex]:
-                    f.write(",".join([f"{j:.4f}" for j in i]))
-                    f.write("\n")
-                f.write("\n")
-
-                for i in [fpr_hybrid, tpr_hybrid, threshold_hybrid]:
-                    f.write(",".join([f"{j:.4f}" for j in i]))
-                    f.write("\n")
-                f.write("\n")
-
-                for i in [fpr_gauss, tpr_gauss, threshold_gauss]:
-                    f.write(",".join([f"{j:.4f}" for j in i]))
-                    f.write("\n")
-                f.write("\n")
-
-                for i in [fpr_GAN, tpr_GAN, threshold_GAN]:
-                    f.write(",".join([f"{j:.4f}" for j in i]))
-                    f.write("\n")
-                f.write("\n")
 
     simplex_sqe = np.array(simplex_sqe)
     gauss_sqe = np.array(gauss_sqe)
@@ -663,16 +622,20 @@ def roc_data():
     img_256 = np.array(img_256)
     img_128 = np.array(img_128)
 
-    with open(f'./metrics/ROC_data_2/Square_Errors.csv', mode="w") as f:
-        for i in [simplex_sqe, gauss_sqe, GAN_sqe, img_256, img_128]:
-            f.write(",".join([f"{j:.4f}" for j in i.flatten()]))
-            f.write("\n")
-        f.write("\n")
-
     fpr_simplex, tpr_simplex, _ = evaluation.ROC_AUC(img_256, simplex_sqe)
     fpr_gauss, tpr_gauss, _ = evaluation.ROC_AUC(img_256, gauss_sqe)
     fpr_GAN, tpr_GAN, _ = evaluation.ROC_AUC(img_128, GAN_sqe)
     fpr_hybrid, tpr_hybrid, _ = evaluation.ROC_AUC(img_256, hybrid_sqe)
+
+    for model in [(fpr_simplex, tpr_simplex, "simplex"), (fpr_gauss, tpr_gauss, "gauss"), (fpr_GAN, tpr_GAN, "GAN"),
+                  (fpr_hybrid, tpr_hybrid, "hybrid")]:
+
+        with open(f'./metrics/ROC_data_2/overall_{model[2]}.csv', mode="w") as f:
+            f.write(f"fpr, tpr, {evaluation.AUC_score(model[0], model[1])}")
+            f.write("\n")
+            for i in range(len(model[0])):
+                f.write(",".join([f"{j:.4f}" for j in [model[0][i], model[1][i]]]))
+                f.write("\n")
 
     plt.plot(fpr_gauss, tpr_gauss, ":", label=f"Gaussian AUC={evaluation.AUC_score(fpr_gauss, tpr_gauss):.3f}")
     plt.plot(
@@ -700,114 +663,6 @@ def roc_data():
     print(f"Simplex hybrid AUC {np.mean(hybrid_AUC)} +- {np.std(hybrid_AUC)}")
     print(f"Gauss AUC {np.mean(gauss_AUC)} +- {np.std(gauss_AUC)}")
     print(f"CE AUC {np.mean(GAN_AUC)} +- {np.std(GAN_AUC)}")
-
-
-def unet_anomalous():
-    args, output = load_parameters(device)
-    args["Batch_Size"] = 1
-    print(repr(args['arg_num']))
-    unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
-
-    unet.load_state_dict(output["ema"])
-    unet.to(device)
-    unet.eval()
-    ano_dataset = dataset.AnomalousMRIDataset(
-            ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
-            slice_selection="iterateKnown_restricted", resized=False
-            )
-    loader = dataset.init_dataset_loader(ano_dataset, args)
-    plt.rcParams['figure.dpi'] = 200
-
-    try:
-        os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}/Anomalous')
-    except OSError:
-        pass
-
-    # make folder for each anomalous volume
-    for i in ano_dataset.slices.keys():
-        try:
-            os.makedirs(f'./diffusion-training-images/ARGS={args["arg_num"]}/Anomalous/{i}')
-        except OSError:
-            pass
-
-    dice_data = []
-    ssim_data = []
-    IOU = []
-    precision = []
-    recall = []
-    FPR = []
-    start_time = time.time()
-    for i in range(len(ano_dataset)):
-
-        new = next(loader)
-        image = new["image"].reshape(new["image"].shape[1], 1, *args["img_size"])
-
-        img_mask_whole = dataset.load_image_mask(new['filenames'][0][-9:-4], args['img_size'], ano_dataset)
-        for slice_number in range(4):
-            try:
-                os.makedirs(
-                        f'./diffusion-training-images/ARGS={args["arg_num"]}/Anomalous/{new["filenames"][0][-9:-4]}/'
-                        f'{new["slices"][slice_number].numpy()[0]}'
-                        )
-            except OSError:
-                pass
-            img = image[slice_number, ...].to(device).reshape(1, 1, *args["img_size"])
-            img_mask = img_mask_whole[slice_number, ...].to(device)
-            img_mask = (img_mask > 0).float().reshape(1, 1, *args["img_size"])
-
-            t_batch = torch.tensor([1], device=device).repeat(img.shape[0])
-            output = unet(img, t_batch)
-            evaluation.heatmap(
-                    img, output.to(device).reshape(1, *args["img_size"]),
-                    img_mask,
-                    f"./diffusion-training-images/ARGS={args['arg_num']}/{new['filenames'][0][-9:-4]}"
-                    f"-{new['slices'][slice_number].cpu().item()}.png",
-                    save=True
-                    )
-            mse = (img - output).square()
-            mse = (mse > 0.5).float()
-            dice_data.append(evaluation.dice_coeff(img, output.to(device), img_mask, mse=mse).detach().cpu().numpy())
-            ssim_data.append(
-                    evaluation.SSIM(img.reshape(*args["img_size"]), output.reshape(*args["img_size"]))
-                    )
-            precision.append(evaluation.precision(img_mask, mse).detach().cpu().numpy())
-            recall.append(evaluation.recall(img_mask, mse).detach().cpu().numpy())
-            IOU.append(evaluation.IoU(img_mask, mse))
-            FPR.append(evaluation.FPR(img_mask, mse).detach().cpu().numpy())
-
-            plt.close('all')
-
-        time_taken = time.time() - start_time
-        remaining_epochs = 22 - i
-        time_per_epoch = time_taken / (i + 1)
-        hours = remaining_epochs * time_per_epoch / 3600
-        mins = (hours % 1) * 60
-        hours = int(hours)
-
-        print(
-                f"file: {new['filenames'][0][-9:-4]}, "
-                f"elapsed time: {int(time_taken / 3600)}:{((time_taken / 3600) % 1) * 60:02.0f}, "
-                f"remaining time: {hours}:{mins:02.0f}"
-                )
-
-        print(f"Dice coefficient: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
-        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +-{np.std(ssim_data[-4:])}")
-        print(f"Dice: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
-        print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +- {np.std(ssim_data[-4:])}")
-        print(f"Precision: {np.mean(precision[-4:])} +- {np.std(precision[-4:])}")
-        print(f"Recall: {np.mean(recall[-4:])} +- {np.std(recall[-4:])}")
-        print(f"FPR: {np.mean(FPR[-4:])} +- {np.std(FPR[-4:])}")
-        print(f"IOU: {np.mean(IOU[-4:])} +- {np.std(IOU[-4:])}")
-
-    print(f"Dice coefficient over all recorded segmentations: {np.mean(dice_data)} +- {np.std(dice_data)}")
-    print(
-            f"Structural Similarity Index (SSIM) over all recorded segmentations: {np.mean(ssim_data)} +-"
-            f" {np.std(ssim_data)}"
-            )
-    print(f"Precision: {np.mean(precision)} +- {np.std(precision)}")
-    print(f"Recall: {np.mean(recall)} +- {np.std(recall)}")
-    print(f"FPR: {np.mean(FPR)} +- {np.std(FPR)}")
-    print(f"IOU: {np.mean(IOU)} +- {np.std(IOU)}")
 
 
 def gan_anomalous():
@@ -1050,6 +905,7 @@ def ce_sliding_window(img, netG, input_cropped, args):
 
 
 if __name__ == "__main__":
+    import sys
     from matplotlib import font_manager
 
     font_path = "./times new roman.ttf"
@@ -1060,22 +916,26 @@ if __name__ == "__main__":
     plt.rcParams['font.sans-serif'] = prop.get_name()
     DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    import sys
 
-    if str(sys.argv[1]) == "100":
-        unet_anomalous()
-    elif str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
+    # if str(sys.argv[1]) == "100":
+    #     unet_anomalous()
+    if str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
             "104":
         gan_anomalous()
     elif str(sys.argv[1]) == "200":
         roc_data()
     elif str(sys.argv[1]) == "500":
         sys.argv[1] = "26"
-        anomalous_dice_calculation()
+        anomalous_metric_calculation()
         sys.argv[1] = "28"
-        anomalous_dice_calculation()
+        anomalous_metric_calculation()
         sys.argv[1] = "103"
         gan_anomalous()
+    elif str(sys.argv[1]) == "201":
+        sys.argv[1] = "26"
+        graph_data()
+        sys.argv[1] = "28"
+        graph_data()
     else:
-        # graph_data()
-        anomalous_dice_calculation()
+
+        anomalous_metric_calculation()
