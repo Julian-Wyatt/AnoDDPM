@@ -30,7 +30,9 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     :return: Trained model and tested
     """
 
-    in_channels = 3 if args["dataset"].lower() == "carpet" else 1
+    in_channels = 1
+    if args["dataset"].lower() == "cifar":
+        in_channels = 3
 
     model = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
@@ -75,7 +77,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     start_time = time.time()
     losses = []
     vlb = collections.deque([], maxlen=10)
-    iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(256)
+    iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(200)
     # iters = range(100 // args['Batch_Size']) if args["dataset"].lower() != "cifar" else range(150)
 
     # dataset loop
@@ -84,7 +86,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
 
         for i in iters:
             data = next(training_dataset_loader)
-            if args["dataset"] == "cifar" or args["dataset"] == "carpet":
+            if args["dataset"] == "cifar":
                 # cifar outputs [data,class]
                 x = data[0].to(device)
             else:
@@ -314,8 +316,16 @@ def main():
         training_dataset_loader = dataset.cycle(training_dataset_loader_)
         testing_dataset_loader = dataset.cycle(testing_dataset_loader_)
     elif args["dataset"].lower() == "carpet":
-        training_dataset, training_dataset_loader = dataset.init_MVTec("./DATASETS/CARPET/", args)
-        testing_dataset, testing_dataset_loader = dataset.init_MVTec("./DATASETS/CARPET_Ano", args)
+        training_dataset = dataset.DAGM(
+                "./DATASETS/CARPET/Class1", False, args["img_size"],
+                False
+                )
+        training_dataset_loader = dataset.init_dataset_loader(training_dataset, args)
+        testing_dataset = dataset.DAGM(
+                "./DATASETS/CARPET/Class1", True, args["img_size"],
+                False
+                )
+        testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
     else:
         # load NFBS dataset
         training_dataset, testing_dataset = dataset.init_datasets(ROOT_DIR, args)

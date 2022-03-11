@@ -443,18 +443,105 @@ def init_dataset_loader(mri_dataset, args, shuffle=True):
     return dataset_loader
 
 
-def init_MVTec(dir, args):
-    tfs = transforms.Compose(
-            [
-                # transforms.ToPILImage(),
-                transforms.Resize(args['img_size'], transforms.InterpolationMode.BILINEAR),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5), (0.5))
-                ]
-            )
-    d_set = datasets.ImageFolder(dir, transform=tfs)
-    loader = init_dataset_loader(d_set, args)
-    return d_set, loader
+class DAGM(Dataset):
+    def __init__(self, dir, anomalous=False, img_size=(256, 256), rgb=False):
+        # dir = './DATASETS/Carpet/Class1'
+        if anomalous and dir[-4:] != "_def":
+            dir += "_def"
+        self.ROOT_DIR = dir
+        self.anomalous = anomalous
+        if rgb:
+            self.transform = transforms.Compose(
+                    [
+                        transforms.ToPILImage(),
+                        transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                        ]
+                    )
+        else:
+            self.transform = transforms.Compose(
+                    [
+                        transforms.ToPILImage(),
+                        transforms.Resize(img_size, transforms.InterpolationMode.BILINEAR),
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.5), (0.5))
+                        ]
+                    )
+        self.rgb = rgb
+        self.img_size = img_size
+        if anomalous:
+            self.coord_info = self.load_coordinates(os.path.join(self.ROOT_DIR, "labels.txt"))
+        self.filenames = os.listdir(self.ROOT_DIR)
+        for i in self.filenames[:]:
+            if not i.endswith(".png"):
+                self.filenames.remove(i)
+        self.filenames = sorted(self.filenames, key=lambda x: int(x[:-4]))
+
+    def load_coordinates(self, path_to_coor):
+        '''
+        '''
+
+        coord_dict_all = {}
+        with open(path_to_coor) as f:
+            coordinates = f.read().split('\n')
+            for coord in coordinates:
+                # print(len(coord.split('\t')))
+                if len(coord.split('\t')) == 6:
+                    coord_dict = {}
+                    coord_split = coord.split('\t')
+                    # print(coord_split)
+                    # print('\n')
+                    coord_dict['major_axis'] = round(float(coord_split[1]))
+                    coord_dict['minor_axis'] = round(float(coord_split[2]))
+                    coord_dict['angle'] = float(coord_split[3])
+                    coord_dict['x'] = round(float(coord_split[4]))
+                    coord_dict['y'] = round(float(coord_split[5]))
+                    index = int(coord_split[0]) - 1
+                    coord_dict_all[index] = coord_dict
+
+        return coord_dict_all
+
+    def make_mask(self, idx, img):
+        mask = np.zeros_like(img)
+        mask = cv2.ellipse(
+                mask,
+                (int(self.coord_info[idx]['x']), int(self.coord_info[idx]['y'])),
+                (int(self.coord_info[idx]['major_axis']), int(self.coord_info[idx]['minor_axis'])),
+                (self.coord_info[idx]['angle'] / 4.7) * 270,
+                0,
+                360,
+                (255, 255, 255),
+                -1
+                )
+
+        mask[mask > 0] = 255
+        return mask
+
+    def __len__(self):
+        return len(self.filenames)
+
+    def __getitem__(self, idx):
+
+        # print(repr(idx))
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        sample = {"filenames": self.filenames[idx]}
+        if self.rgb:
+            sample["image"] = cv2.imread(os.path.join(self.ROOT_DIR, self.filenames[idx]), 1)
+            # sample["image"] = Image.open(os.path.join(self.ROOT_DIR, self.filenames[idx]), "r")
+        else:
+            sample["image"] = cv2.imread(os.path.join(self.ROOT_DIR, self.filenames[idx]), 0)
+
+        if self.anomalous:
+            sample["mask"] = self.make_mask(int(self.filenames[idx][:-4]), sample["image"])
+        if self.transform:
+            image = self.transform(sample["image"])
+            if self.anomalous:
+                sample["mask"] = self.transform(sample["mask"])
+        sample["image"] = image.reshape(1, *self.img_size)
+
+        return sample
 
 
 class MRIDataset(Dataset):
@@ -598,6 +685,12 @@ class AnomalousMRIDataset(Dataset):
                             )
                     )
         sample = {}
+
+        if self.resized:
+            img_mask = np.load(f"{self.ROOT_DIR}/mask/{self.filenames[idx]}-resized.npy")
+        else:
+            img_mask = np.load(f"{self.ROOT_DIR}/mask/{self.filenames[idx]}.npy")
+
         if self.slice_selection == "random":
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             slice_idx = randint(temp_range.start, temp_range.stop)
@@ -609,30 +702,37 @@ class AnomalousMRIDataset(Dataset):
         elif self.slice_selection == "iterateKnown":
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             output = torch.empty(temp_range.stop - temp_range.start, *self.img_size)
-            # print(output.shape, image.shape, temp_range)
-            for i in temp_range:
-                temp = image[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
+            output_mask = torch.empty(temp_range.stop - temp_range.start, *self.img_size)
+
+            for i, val in enumerate(temp_range):
+                temp = image[val, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
+                temp_mask = img_mask[val, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
                 if self.transform:
                     temp = self.transform(temp)
-                    # temp = transforms.functional.rotate(temp, -90)
-                output[i - temp_range.start, ...] = temp
+                    temp_mask = self.transform(temp_mask)
+                output[i, ...] = temp
+                output_mask[i, ...] = temp_mask
             image = output
             sample["slices"] = temp_range
+            sample["mask"] = output_mask
 
         elif self.slice_selection == "iterateKnown_restricted":
 
             temp_range = self.slices[self.filenames[idx][-9:-4]]
             output = torch.empty(4, *self.img_size)
+            output_mask = torch.empty(4, *self.img_size)
             slices = np.linspace(temp_range.start + 5, temp_range.stop - 5, 4).astype(np.uint16)
-            counter = 0
-            for i in slices:
+            for counter, i in enumerate(slices):
                 temp = image[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
+                temp_mask = img_mask[i, ...].reshape(image.shape[1], image.shape[2]).astype(np.float32)
                 if self.transform:
                     temp = self.transform(temp)
+                    temp_mask = self.transform(temp_mask)
                 output[counter, ...] = temp
-                counter += 1
+                output_mask[counter, ...] = temp_mask
             image = output
             sample["slices"] = slices
+            sample["mask"] = output_mask
 
         elif self.slice_selection == "iterateUnknown":
 
@@ -669,55 +769,8 @@ def load_CIFAR10(args, train=True):
             )
 
 
-def load_ImageNET256(args, train=True):
-    return torch.utils.data.DataLoader(
-            datasets.ImageNet(
-                    "./DATASETS/ImageNet", train=train, download=True, transform=transforms
-                        .Compose(
-                            [
-                                transforms.ToTensor(),
-                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-
-                                ]
-                            )
-                    ),
-            shuffle=True, batch_size=args["Batch_Size"], drop_last=True
-            )
-
-
-def load_image_mask(file, img_size, Ano_Dataset_Class):
-    transform = Ano_Dataset_Class.transform
-    if Ano_Dataset_Class.resized:
-        img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}-resized.npy")
-    else:
-        img_mask = np.load(f"{Ano_Dataset_Class.ROOT_DIR}/mask/{file}.npy")
-    if Ano_Dataset_Class.slice_selection == "iterateKnown_restricted":
-        temp_range = Ano_Dataset_Class.slices[file]
-        output = torch.empty(4, *img_size)
-        slices = [int(k) for k in np.linspace(temp_range.start + 5, temp_range.stop - 5, 4)]
-        counter = 0
-        for i in slices:
-            temp = img_mask[i, ...].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
-            if transform:
-                temp = transform(temp)
-            output[counter, ...] = temp
-            counter += 1
-        return output
-    else:
-        output = torch.empty(img_mask.shape[0], *img_size)
-        for i in range(img_mask.shape[0]):
-            temp = img_mask[i:i + 1, :, :].reshape(img_mask.shape[1], img_mask.shape[2]).astype(np.float32)
-            if transform:
-                temp = transform(temp)
-                # temp = transforms.functional.rotate(temp, -90)
-            output[i, ...] = temp
-
-        return output
-
-
-
 if __name__ == "__main__":
-    # load_datasets_for_test()
+    load_datasets_for_test()
     # get_segmented_labels(True)
     # main(True)
-    make_pngs_anogan()
+    # make_pngs_anogan()
