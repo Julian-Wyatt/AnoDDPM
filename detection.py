@@ -160,14 +160,20 @@ def anomalous_metric_calculation():
     :return:
     """
     args, output = load_parameters(device)
+    in_channels = 1
+    if args["dataset"].lower() == "leather":
+        in_channels = 3
+
     print(f"args{args['arg_num']}")
-    unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
+    unet = UNetModel(
+            args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], in_channels=in_channels
+            )
 
     betas = get_beta_schedule(args['T'], args['beta_schedule'])
 
     diff = GaussianDiffusionModel(
             args['img_size'], betas, loss_weight=args['loss_weight'],
-            loss_type=args['loss-type'], noise=args["noise_fn"]
+            loss_type=args['loss-type'], noise=args["noise_fn"], img_channels=in_channels
             )
 
     unet.load_state_dict(output["ema"])
@@ -175,11 +181,19 @@ def anomalous_metric_calculation():
     unet.eval()
     if args["dataset"].lower() == "carpet":
         d_set = dataset.DAGM("./DATASETS/CARPET/Class1", True)
+        d_set_size = len(d_set)
+    elif args["dataset"].lower() == "leather":
+        d_set = dataset.MVTec(
+                "./DATASETS/leather", anomalous=True, img_size=args["img_size"],
+                rgb=True, include_good=False
+                )
+        d_set_size = len(d_set)
     else:
         d_set = dataset.AnomalousMRIDataset(
                 ROOT_DIR=f'{DATASET_PATH}', img_size=args['img_size'],
-                slice_selection="iterateKnown_restricted", resized=False
+                slice_selection="iterateKnown_restricted", resized=False, cleaned=True
                 )
+        d_set_size = len(d_set) * 4
     loader = dataset.init_dataset_loader(d_set, args)
     plt.rcParams['figure.dpi'] = 200
 
@@ -192,15 +206,15 @@ def anomalous_metric_calculation():
     AUC_scores = []
 
     start_time = time.time()
-    for i in range(len(d_set)):
+    for i in range(d_set_size):
 
-        if args["dataset"].lower() != "carpet":
+        if args["dataset"].lower() != "carpet" and args["dataset"].lower() != "leather":
             if i % 4 == 0:
-                image_whole = next(loader)
-                image_whole["image"].reshape(image_whole["image"].shape[1], 1, *args["img_size"])
-                image_whole["mask"].reshape(image_whole["mask"].shape[1], 1, *args["img_size"])
-            image = image_whole["image"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
-            mask = image_whole["mask"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
+                new = next(loader)
+                new["image"] = new["image"].reshape(new["image"].shape[1], 1, *args["img_size"])
+                new["mask"] = new["mask"].reshape(new["mask"].shape[1], 1, *args["img_size"])
+            image = new["image"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
+            mask = new["mask"][i % 4, ...].to(device).reshape(1, 1, *args["img_size"])
         else:
             new = next(loader)
             image = new["image"].to(device)
@@ -209,11 +223,11 @@ def anomalous_metric_calculation():
         output = diff.forward_backward(
                 unet, image,
                 see_whole_sequence=None,
-                t_distance=250, denoise_fn=args["noise_fn"]
+                t_distance=200, denoise_fn=args["noise_fn"]
                 )
 
         mse = (image - output).square()
-        fpr_simplex, tpr_simplex, _ = evaluation.ROC_AUC(mask, mse)
+        fpr_simplex, tpr_simplex, _ = evaluation.ROC_AUC(mask.to(torch.uint8), mse)
         AUC_scores.append(evaluation.AUC_score(fpr_simplex, tpr_simplex))
         mse = (mse > 0.5).float()
         # print(img.shape, output.shape, img_mask.shape, mse.shape)
@@ -223,8 +237,12 @@ def anomalous_metric_calculation():
                         mask, mse=mse
                         ).cpu().item()
                 )
+
         ssim_data.append(
-                evaluation.SSIM(image.reshape(*args["img_size"]), output.reshape(*args["img_size"]))
+                evaluation.SSIM(
+                        image.permute(0, 2, 3, 1).reshape(*args["img_size"], image.shape[1]),
+                        output.permute(0, 2, 3, 1).reshape(*args["img_size"], image.shape[1])
+                        )
                 )
         precision.append(evaluation.precision(mask, mse).cpu().numpy())
         recall.append(evaluation.recall(mask, mse).cpu().numpy())
@@ -234,7 +252,7 @@ def anomalous_metric_calculation():
 
         if i % 8 == 0:
             time_taken = time.time() - start_time
-            remaining_epochs = len(d_set) - i
+            remaining_epochs = d_set_size - i
             time_per_epoch = time_taken / (i + 1)
             hours = remaining_epochs * time_per_epoch / 3600
             mins = (hours % 1) * 60
@@ -245,10 +263,8 @@ def anomalous_metric_calculation():
                     f"remaining time: {hours}:{mins:02.0f}"
                     )
 
-        if i % 4 == 0 and args["dataset"].lower() != "carpet":
+        if i % 4 == 0 and (args["dataset"].lower() != "carpet" and args["dataset"].lower() != "leather"):
             print(f"file: {new['filenames'][0][-9:-4]}")
-            print(f"Dice coefficient: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
-            print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +-{np.std(ssim_data[-4:])}")
             print(f"Dice: {np.mean(dice_data[-4:])} +- {np.std(dice_data[-4:])}")
             print(f"Structural Similarity Index (SSIM): {np.mean(ssim_data[-4:])} +- {np.std(ssim_data[-4:])}")
             print(f"Precision: {np.mean(precision[-4:])} +- {np.std(precision[-4:])}")
@@ -447,7 +463,7 @@ def roc_data():
     unet_simplex.eval()
     unet_gauss.eval()
 
-    import CE
+    import Comparative_models.CE as CE
     sys.argv[1] = "103"
     args_GAN, output_GAN = load_parameters(device)
     args_GAN["Batch_Size"] = 1
@@ -666,7 +682,7 @@ def roc_data():
 
 
 def gan_anomalous():
-    import CE
+    import Comparative_models.CE as CE
     args, output = load_parameters(device)
     args["Batch_Size"] = 1
 
@@ -748,6 +764,7 @@ def gan_anomalous():
                     evaluation.dice_coeff(img, recon_image.to(device), img_mask, mse=mse).detach().cpu().numpy()
                     )
             ssim_data.append(
+
                     evaluation.SSIM(img.reshape(*args["img_size"]), recon_image.reshape(*args["img_size"]))
                     )
             precision.append(evaluation.precision(img_mask, mse).detach().cpu().numpy())
