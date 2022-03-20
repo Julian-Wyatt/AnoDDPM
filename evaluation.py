@@ -45,7 +45,7 @@ def PSNR(recon, real):
 
 
 def SSIM(real, recon):
-    return ssim(real.detach().cpu().numpy(), recon.detach().cpu().numpy())
+    return ssim(real.detach().cpu().numpy(), recon.detach().cpu().numpy(), channel_axis=2)
 
 
 def IoU(real, recon):
@@ -54,7 +54,7 @@ def IoU(real, recon):
     recon = recon.cpu().numpy()
     intersection = np.logical_and(real, recon)
     union = np.logical_or(real, recon)
-    return np.sum(intersection) / np.sum(union)
+    return np.sum(intersection) / (np.sum(union) + 1e-8)
 
 
 def precision(real_mask, recon_mask):
