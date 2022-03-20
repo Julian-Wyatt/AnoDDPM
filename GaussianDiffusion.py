@@ -110,23 +110,31 @@ def generate_simplex_noise(
                      (1, 0.85, 8),
                      (1, 0.85, 4), (1, 0.85, 2), ]
                     )
+            # 2D octaves seem to introduce directional artifacts in the top left
             noise[:, i, ...] = torch.unsqueeze(
                     torch.from_numpy(
-                            Simplex_instance.rand_2d_octaves(
-                                    x.shape[-2:], param[0], param[1],
+                            # Simplex_instance.rand_2d_octaves(
+                            #         x.shape[-2:], param[0], param[1],
+                            #         param[2]
+                            #         )
+                            Simplex_instance.rand_3d_fixed_T_octaves(
+                                    x.shape[-2:], t.detach().cpu().numpy(), param[0], param[1],
                                     param[2]
                                     )
                             ).to(x.device), 0
                     ).repeat(x.shape[0], 1, 1, 1)
         noise[:, i, ...] = torch.unsqueeze(
                 torch.from_numpy(
-                        Simplex_instance.rand_2d_octaves(
-                                x.shape[-2:], octave,
+                        # Simplex_instance.rand_2d_octaves(
+                        #         x.shape[-2:], octave,
+                        #         persistence, frequency
+                        #         )
+                        Simplex_instance.rand_3d_fixed_T_octaves(
+                                x.shape[-2:], t.detach().cpu().numpy(), octave,
                                 persistence, frequency
                                 )
                         ).to(x.device), 0
                 ).repeat(x.shape[0], 1, 1, 1)
-
     return noise
 
 
@@ -283,7 +291,7 @@ class GaussianDiffusionModel:
         model_var = extract(model_var, t, x_t.shape, x_t.device)
         model_logvar = extract(model_logvar, t, x_t.shape, x_t.device)
 
-        pred_x_0 = self.predict_x_0_from_eps(x_t.clamp(-1, 1), t, estimate_noise)
+        pred_x_0 = self.predict_x_0_from_eps(x_t, t, estimate_noise).clamp(-1, 1)
         model_mean, _, _ = self.q_posterior_mean_variance(
                 pred_x_0, x_t, t
                 )
@@ -306,7 +314,7 @@ class GaussianDiffusionModel:
                 # noise = random_noise(self.simplex, x_t, t).float()
                 noise = torch.randn_like(x_t)
             else:
-                noise = generate_simplex_noise(self.simplex, x_t, t, False).float()
+                noise = generate_simplex_noise(self.simplex, x_t, t, False, in_channels=self.img_channels).float()
         else:
             noise = denoise_fn(x_t, t)
 
@@ -487,7 +495,10 @@ class GaussianDiffusionModel:
 
         for i in range(7, 0, -1):
             freq = 2 ** i
-            self.noise_fn = lambda x, t: generate_simplex_noise(self.simplex, x, t, False, frequency=freq)
+            self.noise_fn = lambda x, t: generate_simplex_noise(
+                    self.simplex, x, t, False, frequency=freq,
+                    in_channels=self.img_channels
+                    )
 
             for t_distance in range(50, int(args["T"] * 0.6), 50):
                 output = torch.empty((total_avg, 1, *args["img_size"]), device=x_0.device)
@@ -614,7 +625,6 @@ class GaussianDiffusionModel:
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
 
-            # print((i - 1) * 6, i * 6)
             output[(i - 1) * 6:i * 6, ...] = torch.cat((x_0, x_noised, x, mse, mse_threshold, mask))
 
         return output
