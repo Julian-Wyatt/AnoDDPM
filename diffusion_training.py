@@ -31,8 +31,11 @@ def train(training_dataset_loader, testing_dataset_loader, args, resume):
     """
 
     in_channels = 1
-    if args["dataset"].lower() == "cifar":
+    if args["dataset"].lower() == "cifar" or args["dataset"].lower() == "leather":
         in_channels = 3
+
+    if args["channels"] != "":
+        in_channels = args["channels"]
 
     model = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
@@ -308,6 +311,8 @@ def main():
             pass
 
     print(file, args)
+    if args["channels"] != "":
+        in_channels = args["channels"]
 
     # if dataset is cifar, load different training & test set
     if args["dataset"].lower() == "cifar":
@@ -325,6 +330,27 @@ def main():
                 "./DATASETS/CARPET/Class1", True, args["img_size"],
                 False
                 )
+        testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
+    elif args["dataset"].lower() == "leather":
+        if in_channels == 3:
+            training_dataset = dataset.MVTec(
+                    "./DATASETS/leather", anomalous=False, img_size=args["img_size"],
+                    rgb=True
+                    )
+            testing_dataset = dataset.MVTec(
+                    "./DATASETS/leather", anomalous=True, img_size=args["img_size"],
+                    rgb=True, include_good=True
+                    )
+        else:
+            training_dataset = dataset.MVTec(
+                    "./DATASETS/leather", anomalous=False, img_size=args["img_size"],
+                    rgb=False
+                    )
+            testing_dataset = dataset.MVTec(
+                    "./DATASETS/leather", anomalous=True, img_size=args["img_size"],
+                    rgb=False, include_good=True
+                    )
+        training_dataset_loader = dataset.init_dataset_loader(training_dataset, args)
         testing_dataset_loader = dataset.init_dataset_loader(testing_dataset, args)
     else:
         # load NFBS dataset
