@@ -8,12 +8,14 @@ The project was accepted at the CVPR Workshop: NTIRE 2022: [Project](https://jul
 
 ## Simplex noise examples
 
-<img src='https://julianwyatt.co.uk/assets/img/portfolio/anoddpm2-compressed.gif' width=384>
-
-<img src='https://julianwyatt.co.uk/assets/img/portfolio/anoddpm3-compressed.gif' width=384>
+<p align="center">
+  <img alt="gif 1" src="https://github.com/Julian-Wyatt/JulianWyatt.github.io/blob/db50a67bec8aece87e185260572ece35d74b74df/assets/img/portfolio/anoddpm2-compressed.gif" width="45%">
+&nbsp; &nbsp; &nbsp; &nbsp;
+  <img alt="gif 2" src="https://github.com/Julian-Wyatt/JulianWyatt.github.io/blob/db50a67bec8aece87e185260572ece35d74b74df/assets/img/portfolio/anoddpm3-compressed.gif" width="45%">
+</p>
 
 
 ## Gaussian noise example
 
-<img src='https://julianwyatt.co.uk/assets/img/portfolio/anoddpmGauss.gif' width=384>
+<img src='https://github.com/Julian-Wyatt/JulianWyatt.github.io/blob/db50a67bec8aece87e185260572ece35d74b74df/assets/img/portfolio/anoddpmGauss.gif' width=45%>
 
