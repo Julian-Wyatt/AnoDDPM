@@ -16,6 +16,7 @@ The project was accepted at the CVPR Workshop: NTIRE 2022: [Project](https://jul
 
 
 ## Gaussian noise example
-
-<img src='https://github.com/Julian-Wyatt/JulianWyatt.github.io/blob/db50a67bec8aece87e185260572ece35d74b74df/assets/img/portfolio/anoddpmGauss.gif' width=45%>
+<p align="center">
+  <img src='https://github.com/Julian-Wyatt/JulianWyatt.github.io/blob/db50a67bec8aece87e185260572ece35d74b74df/assets/img/portfolio/anoddpmGauss.gif' width=45%>
+</p>
 
