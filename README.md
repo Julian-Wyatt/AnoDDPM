@@ -6,10 +6,6 @@ The code was written by [Julian Wyatt](https://github.com/Julian-Wyatt) and is b
 
 The project was accepted at the CVPR Workshop: NTIRE 2022: [Project](https://julianwyatt.co.uk/anoddpm) | [Paper](https://openaccess.thecvf.com/content/CVPR2022W/NTIRE/html/Wyatt_AnoDDPM_Anomaly_Detection_With_Denoising_Diffusion_Probabilistic_Models_Using_Simplex_CVPRW_2022_paper.html)
 
-If you use this code for your research, please cite:
-AnoDDPM: Anomaly Detection With Denoising Diffusion Probabilistic Models Using Simplex Noise
-
-[Julian Wyatt](https://github.com/Julian-Wyatt), [Adam Leach](https://github.com/qazwsxal), [Sebastian M. Schmon](https://scholar.google.com/citations?user=hs2WrYYAAAAJ&hl=en&oi=ao), [Chris G. Willcocks](https://github.com/cwkx); Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) Workshops, 2022
 
 ## Simplex noise examples
 
@@ -26,6 +22,11 @@ AnoDDPM: Anomaly Detection With Denoising Diffusion Probabilistic Models Using S
 </p>
 
 ## Citation:
+
+If you use this code for your research, please cite:<br>
+AnoDDPM: Anomaly Detection With Denoising Diffusion Probabilistic Models Using Simplex Noise<br>
+[Julian Wyatt](https://github.com/Julian-Wyatt), [Adam Leach](https://github.com/qazwsxal), [Sebastian M. Schmon](https://scholar.google.com/citations?user=hs2WrYYAAAAJ&hl=en&oi=ao), [Chris G. Willcocks](https://github.com/cwkx); Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) Workshops, 2022
+
 ```
 @InProceedings{Wyatt_2022_CVPR,
     author    = {Wyatt, Julian and Leach, Adam and Schmon, Sebastian M. and Willcocks, Chris G.},
