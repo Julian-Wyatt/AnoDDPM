@@ -1,3 +1,7 @@
+"""
+Output varying figures for paper
+"""
+
 import random
 
 from matplotlib import animation
@@ -8,6 +12,17 @@ from helpers import gridify_output, load_parameters
 
 
 def make_prediction(real, recon, mask, x_t, threshold=0.5, error_fn="sq"):
+    """
+    Make generic prediction and output tensor with order (real, x_lambda, reconstruction, square error, square error
+    threshold, ground truth mask)
+    :param real: initial real image x_0
+    :param recon: reconstruction when diffused to x_t
+    :param mask: ground truth mask
+    :param x_t: middle image when initial image x_0 is noised through t time steps
+    :param threshold: value to take threshold
+    :param error_fn: square or l1 error - future work could explore error functions in feature space
+    :return:
+    """
     if error_fn == "sq":
         mse = ((recon - real).square() * 2) - 1
     elif error_fn == "l1":
@@ -20,50 +35,58 @@ def make_prediction(real, recon, mask, x_t, threshold=0.5, error_fn="sq"):
 
 def output_denoise_sequence(sequence: list, filename, masks, predictions):
     """
-    sequence is ideally [[t lots of images],[t lots of images],[t lots of images],[t lots of images]]
-    or sequence is [t lots of images]
-    :param sequence:
+    sequence is [[t lots of images],[t lots of images],[t lots of images],[t lots of images]]
+    or sequence is [t lots of images] where t is the number of forwad images plus backward plus
+    prediction and real mask
+    :param sequence: sequence of images (see above)
+    :param filename: output filename
+    :param masks: list of ground truth masks
+    :param predictions: list of predicted images
     :return:
     """
 
     if len(sequence) > 10:
         sequence = [sequence]
 
+    # split the forward and backward elements for labelling
     relevant_elements_forward = np.linspace(0, len(sequence[0]) // 2, 6).astype(np.int32)
     relevant_elements_backward = (-1 * relevant_elements_forward[-2::-1]) - 1
 
     relevant_elements = np.append(relevant_elements_forward, relevant_elements_backward)
 
     # sequence[0].shape  # B,C,H,W
+    # init empty figure
     output = torch.empty(13 * len(sequence), sequence[0][0].shape[1], 256, 256, )
 
+    # push each subimage into figure
     for j, new_sequence in enumerate(sequence):
 
         for i, val in enumerate(relevant_elements):
             output[13 * j + i] = new_sequence[val]
         output[13 * (j + 1) - 2] = predictions[j]
         output[13 * (j + 1) - 1] = masks[j]
+
     output = output.permute(0, 2, 3, 1)
     fig, subplots = plt.subplots(
             len(sequence), 13, figsize=(13, len(sequence)),
             gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
             )
-
+    # mpl implot images with relevant pixel value renormalisation
     for brain in range(len(sequence)):
         for noise in range(13):
-            # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
+            # plot diffusion sequence
             if output[0].shape[-1] == 1:
                 # img = scale_img(output[13 * brain + noise])
                 subplots[brain][noise].imshow(
                         output[13 * brain + noise].reshape(*output[0].shape[-3:-1]).cpu().numpy(), cmap="gray"
                         )
             else:
-
+                # mask
                 if noise < 12:
-
                     # img = scale_img(output[13 * brain + noise])
                     img = (output[13 * brain + noise] + 1) / 2
                 else:
+                    # prediction
                     img = output[13 * brain + noise]
                 # img = scale_img(output[13 * brain + noise])
                 subplots[brain][noise].imshow(
@@ -73,7 +96,8 @@ def output_denoise_sequence(sequence: list, filename, masks, predictions):
                     top=False, bottom=False, left=False, right=False,
                     labelleft=False, labelbottom=False
                     )
-            # subplots[brain][noise].axis('off')
+
+    # Add axis labels
     for i in range(6):
 
         subplots[0][i].set_xlabel(f"$x_{{{relevant_elements[i]}}}$", fontsize=6)
@@ -102,6 +126,7 @@ def output_masked_comparison(sequence, filename, t_distance=250, ):
     if type(sequence) == torch.tensor:
         sequence = [sequence]
 
+    # make plots
     fig, subplots = plt.subplots(
             len(sequence), 6, constrained_layout=False, figsize=(6, len(sequence)),
             squeeze=False,
@@ -117,15 +142,18 @@ def output_masked_comparison(sequence, filename, t_distance=250, ):
             # print(plot, torch.max(brain[plot]), torch.min(brain[plot]))
             # BCHW
             if plot > 2:
+                # pick colourmap
                 if plot == 3:
                     cmap = "hot"
                 else:
                     cmap = "gray"
-
+                # convert square error to grayscale for rgb images
                 if brain[plot].shape[-3] == 3:
                     square_error_gray = transforms.functional.rgb_to_grayscale(brain[plot] + 1)
+                    # threshold prediction
                     if plot == 4:
                         square_error_gray = ((square_error_gray > 0.1).float() * 2) - 1
+
                     subplots[i][plot].imshow(
                             square_error_gray.permute(1, 2, 0).cpu().numpy(), cmap=cmap
                             )
@@ -133,7 +161,7 @@ def output_masked_comparison(sequence, filename, t_distance=250, ):
                     subplots[i][plot].imshow((brain[plot] + 1).permute(1, 2, 0).cpu().numpy(), cmap=cmap)
             else:
                 # img = scale_img(brain[plot])
-
+                # renorm image
                 img = (brain[plot] + 1) / 2
 
                 subplots[i][plot].imshow(
@@ -145,6 +173,7 @@ def output_masked_comparison(sequence, filename, t_distance=250, ):
                     labelleft=False, labelbottom=False
                     )
 
+    # add labels and save
     for i, val in enumerate(
             ["$x_0$", f"$x_{{{t_distance}}}$", "Reconstruction", "Square Error", "Prediction",
              "Ground Truth"]
@@ -156,11 +185,17 @@ def output_masked_comparison(sequence, filename, t_distance=250, ):
 
 
 def make_videos():
+    """
+    generate videos for dataset based on input arguments
+    :return: selection of videos for dataset of trained model
+    """
+    # load parameters
     args, output = load_parameters(device)
     in_channels = 1
     if args["dataset"].lower() == "leather":
         in_channels = 3
 
+    # init model, betas and diffusion classes
     unet = UNetModel(
             args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], in_channels=in_channels
             )
@@ -171,10 +206,12 @@ def make_videos():
             args['img_size'], betas, loss_weight=args['loss_weight'],
             loss_type=args['loss-type'], noise=args["noise_fn"], img_channels=in_channels
             )
-
+    print(args)
+    # load checkpoint
     unet.load_state_dict(output["ema"])
     unet.to(device)
     unet.eval()
+    # load specific dataset - ie carpet / leather / MRI
     if args["dataset"].lower() == "carpet":
         d_set = dataset.DAGM("./DATASETS/CARPET/Class1", True)
     elif args["dataset"].lower() == "leather":
@@ -191,37 +228,39 @@ def make_videos():
     loader = dataset.init_dataset_loader(d_set, args)
     plt.rcParams['figure.dpi'] = 100
 
+    # make directories
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
-        try:
+        if not os.path.exists(i):
             os.makedirs(i)
-        except OSError:
-            pass
 
-    # t_distance = 200
-    for i in range(3):
+    # generate 20 videos
+    for i in range(20):
 
-        t_distance = 300
-        print(f"epoch {i}")
+        #  if using simplex noise - select random lambda parameters with weighted probabilities
+        if str(args["arg_num"]) == '28':
+            t_distance = np.random.choice([150, 200, 250], p=[0.2, 0.4, 0.4])
+        else:
+            # select different parameters
+            t_distance = np.random.choice([250, 500, 750], p=[0.2, 0.4, 0.4])
+        print(f"loop {i}")
         new = next(loader)
         img = new["image"].to(device)
 
-        img_mask = new["mask"]
-        img_mask = img_mask.to(device)
-
+        # if mri - select random slice
         if args["dataset"] != "carpet" and args["dataset"] != "leather":
 
             slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
             img = img.reshape(img.shape[1], 1, *args["img_size"])
             img = img[slice, ...].reshape(1, 1, *args["img_size"])
-            img_mask = img_mask.reshape(img_mask.shape[1], 1, *args["img_size"])
-            img_mask = img_mask[slice, ...].reshape(1, 1, *args["img_size"])
 
+        # perform diffusion
         output = diff.forward_backward(
                 unet, img,
-                see_whole_sequence="half",
+                see_whole_sequence="whole",
                 # t_distance=5, denoise_fn=args["noise_fn"]
                 t_distance=t_distance, denoise_fn=args["noise_fn"]
                 )
+        # plot, animate and save diffusion process
         fig, ax = plt.subplots()
         plt.axis('off')
         imgs = [[ax.imshow(gridify_output(output[x], 1), animated=True)] for x in range(0, len(output), 2)]
@@ -356,16 +395,25 @@ def make_ano_outputs():
 
 
 def make_gauss_simplex_outputs(simplex_argNum="28", gauss_argNum="26"):
+    """
+    Output figure containing both gauss and simplex noise
+    :param simplex_argNum: arg value of saved simplex checkpoint
+    :param gauss_argNum: arg value of saved gauss checkpoint
+    :return:
+    """
     sys.argv[1] = simplex_argNum
     args_simplex, output_simplex = load_parameters(device)
     sys.argv[1] = gauss_argNum
     args_gauss, output_gauss = load_parameters(device)
+    # consider different channel sizes
 
     in_channels = 1
     if args_simplex["dataset"].lower() == "leather":
         in_channels = 3
     if args_simplex["channels"] != "":
         in_channels = args_simplex["channels"]
+
+    # init model and checkpoints
 
     unet_simplex = UNetModel(
             args_simplex['img_size'][0], args_simplex['base_channels'], channel_mults=args_simplex['channel_mults'],
@@ -391,6 +439,8 @@ def make_gauss_simplex_outputs(simplex_argNum="28", gauss_argNum="26"):
     unet_gauss.load_state_dict(output_gauss["ema"])
     unet_simplex.eval()
     unet_gauss.eval()
+
+    # init varying datasets
     if args_simplex["dataset"].lower() == "carpet":
         d_set = dataset.DAGM("./DATASETS/CARPET/Class1", True)
     elif args_simplex["dataset"].lower() == "leather":
@@ -415,23 +465,27 @@ def make_gauss_simplex_outputs(simplex_argNum="28", gauss_argNum="26"):
 
     for i in [f'./final-outputs/', f'./final-outputs/gauss_simplex', f'./final-outputs/gauss_simplex/'
                                                                      f'{args_simplex["dataset"]}-{in_channels}']:
-        try:
+        if not os.path.exists(i):
             os.makedirs(i)
-        except OSError:
-            pass
-
+    # generate 20 figures
     for i in range(20):
 
         predictions = []
         unet_simplex.to(device)
+        # select number of rows - ie 2 simplex and 2 gauss or 1 of each
         rows = random.randint(1, 2)
-        rows = 1
+        # select lambda to directly compare lambda values
         t_distance = np.random.choice([150, 200, 250, 300], p=[0.25, 0.25, 0.25, 0.25])
+        # select random threshold - this was found to be more of a hyperparameter for textured surfaces such as from
+        # DAGM and MVTec
         threshold = np.random.choice([0.15, 0.2, 0.25])
         imgs = []
 
         for k in range(rows):
             new = next(loader)
+            # As the MVTec takes a section of a larger image - omly use an image with more than 1000 pixels in ground
+            # truth mask to guarantee an anomaly lies
+
             while torch.sum(new["mask"]) < 1000:
                 new = next(loader)
             if args_simplex["dataset"] != "carpet" and args_simplex["dataset"] != "leather":
@@ -489,7 +543,14 @@ def make_gauss_simplex_outputs(simplex_argNum="28", gauss_argNum="26"):
                 )
 
 
-def make_test_set_outputs(anomalous=False):
+def make_test_set_outputs(anomalous=False, t_distance=250):
+    """
+    Generate Fig 1 from paper - containing Gauss and simplex noise on healthy or anomalous test set
+    :param anomalous: test on anomalous?
+    :param t_distance: lambda value for diffusion process
+    :return:
+    """
+    # load both simplex and Gauss checkpoints separately
     sys.argv[1] = "28"
     args_simplex, output_simplex = load_parameters(device)
     sys.argv[1] = "26"
@@ -530,12 +591,9 @@ def make_test_set_outputs(anomalous=False):
     plt.rcParams['figure.dpi'] = 1000
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args_simplex["arg_num"]}']:
-        try:
+        if not os.path.exists(i):
             os.makedirs(i)
-        except OSError:
-            pass
 
-    t_distance = 250
     for i in range(20):
 
         sequences = []
@@ -545,6 +603,7 @@ def make_test_set_outputs(anomalous=False):
         else:
             rows = 2
         # rows = np.random.choice([1, 2], p=[0.4, 0.6])
+        # select each volume for imgs - and diffuse each with simplex noise
         imgs = []
         for i in range(rows):
             new = next(loader)
@@ -566,6 +625,7 @@ def make_test_set_outputs(anomalous=False):
             sequences.append(output)
         unet_simplex.cpu()
 
+        # diffuse each with gaussian noise
         unet_gauss.to(device)
         for k in range(rows):
             img = imgs[k]
@@ -577,6 +637,8 @@ def make_test_set_outputs(anomalous=False):
 
             sequences.append(output)
         unet_gauss.cpu()
+
+        # following image generation - output images with similar format to function - output_denoise_sequence
 
         temp = os.listdir(f"./final-outputs/ARGS={args_simplex['arg_num']}")
 
@@ -590,6 +652,7 @@ def make_test_set_outputs(anomalous=False):
 
         output = torch.empty(7 * len(sequences), 1, 256, 256)
 
+        # insert each image into empty tensor
         for j, new_sequence in enumerate(sequences):
 
             for i, val in enumerate(relevant_elements):
@@ -600,6 +663,7 @@ def make_test_set_outputs(anomalous=False):
                 gridspec_kw={'wspace': 0, 'hspace': 0}, squeeze=False
                 )
 
+        # plot each image
         for brain in range(len(sequences)):
             for noise in range(7):
                 # subplots[brain][noise].imshow(output[12 * brain + noise].reshape(256, 256, 1), cmap="gray")
@@ -612,6 +676,7 @@ def make_test_set_outputs(anomalous=False):
                         labelleft=False, labelbottom=False
                         )
                 # subplots[brain][noise].axis('off')
+        # set labels
         for i in range(4):
 
             subplots[0][i].set_xlabel(f"$x_{{{relevant_elements[i]}}}$", fontsize=6)
@@ -621,8 +686,6 @@ def make_test_set_outputs(anomalous=False):
             subplots[0][i].set_xlabel(f"$x_{{{relevant_elements_forward[::-1][1:][i - 4]}}}$", fontsize=6)
             subplots[0][i].xaxis.set_label_position("top")
 
-        # plt.show()
-        # plt.pause(5)
         plt.savefig(
                 f'./final-outputs/ARGS={args_simplex["arg_num"]}/test_set_mixed_attempt'
                 f'={len(temp) + 1}-sequence.png'
@@ -631,6 +694,11 @@ def make_test_set_outputs(anomalous=False):
 
 
 def make_varying_frequency_outputs():
+    """
+    Figure for affect of simplex frequency on segmentation performance - Fig. 3 from AnoDDPM paper
+    :return:
+    """
+    # init model and load checkpoint
     args, output = load_parameters(device)
 
     unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
@@ -654,11 +722,9 @@ def make_varying_frequency_outputs():
     plt.rcParams['figure.dpi'] = 1000
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
-        try:
+        if not os.path.exists(i):
             os.makedirs(i)
-        except OSError:
-            pass
-
+    # generate 22 images - ie one figure for each volume in MRI dataset
     for i in range(22):
 
         print(f"epoch {i}")
@@ -670,6 +736,7 @@ def make_varying_frequency_outputs():
         img_mask = img_mask.to(device)
 
         slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
+        # diffuse over varying frequency values
         output = diff.detection_A_fixedT(
                 unet, img[slice, ...].reshape(1, 1, *args["img_size"]), args,
                 img_mask[slice, ...].reshape(1, 1, *args["img_size"])
@@ -681,6 +748,7 @@ def make_varying_frequency_outputs():
                 )
 
         tempplot = fig.add_subplot(111, frameon=False)
+        #  plot  images and set label
 
         for freq in range(6):
             for out_img in range(6):
@@ -721,6 +789,12 @@ def make_varying_frequency_outputs():
 
 
 def gauss_varyingT_outputs():
+    """
+    generate figure for Gaussian diffusion with lambda as 250,500,750
+    :return:
+    """
+
+    # init model and load checkpoint
     args, output = load_parameters(device)
 
     unet = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'])
@@ -744,23 +818,25 @@ def gauss_varyingT_outputs():
     plt.rcParams['figure.dpi'] = 1000
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
-        try:
+        if not os.path.exists("./final-outputs"):
             os.makedirs(i)
-        except OSError:
-            pass
 
+    # generate 20 figures
     for i in range(20):
 
 
         print(f"epoch {i}")
 
+        # select image and slice
         new = next(loader)
         img = new["image"].to(device)
         img = img.reshape(img.shape[1], 1, *args["img_size"])
-        img_mask = img_mask = new["mask"]
+        img_mask = new["mask"]
         img_mask = img_mask.to(device)
 
         slice = np.random.choice([0, 1, 2, 3], p=[0.2, 0.3, 0.3, 0.2])
+
+        # perform diffusion with lambda as 250, 500 and 750
 
         output_250 = diff.forward_backward(
                 unet, img[slice, ...].reshape(1, 1, *args["img_size"]),
@@ -800,6 +876,7 @@ def gauss_varyingT_outputs():
 
         # x_0,x_t,\hat{x}_0,se,se_threshold,ground truth
 
+        # output figure manually
         temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
 
         fig, subplots = plt.subplots(
@@ -830,6 +907,7 @@ def gauss_varyingT_outputs():
         subplots[2][4].imshow(output_750_images[4].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
         subplots[2][5].imshow(output_750_images[5].reshape(*args["img_size"]).cpu().numpy(), cmap="gray")
 
+        # set labels and save
         for i in range(3):
             for j in range(6):
                 subplots[i][j].tick_params(
@@ -857,11 +935,14 @@ def gauss_varyingT_outputs():
 def make_gan_outputs():
     import Comparative_models.CE as CE
     import detection
+
+    # Figure for context encoder model
     args, output = load_parameters(device)
     args["Batch_Size"] = 1
 
     netG = CE.Generator(start_size=args['img_size'][0], out_size=args['inpaint_size'], dropout=args["dropout"])
 
+    # load params and dataset
     netG.load_state_dict(output["generator_state_dict"])
     netG.to(device)
     netG.eval()
@@ -872,20 +953,21 @@ def make_gan_outputs():
 
     loader = dataset.init_dataset_loader(ano_dataset, args)
 
+    # init args
     overlapSize = args['overlap']
     input_cropped = torch.FloatTensor(args['Batch_Size'], 1, 256, 256)
     input_cropped = input_cropped.to(device)
 
     for i in [f'./final-outputs/', f'./final-outputs/ARGS={args["arg_num"]}']:
-        try:
+        if not os.path.exists("./final-outputs"):
             os.makedirs(i)
-        except OSError:
-            pass
 
+    # output 22 images
     for i in range(22):
 
         predictions = []
 
+        # randomly select number of mri images per figure
         rows = np.random.choice([1, 2, 3, 4, 5, 8], p=[0.3, 0.3, 0.1, 0.1, 0.15, 0.05])
         print(f"epoch {i}, rows @ epoch: {rows}")
         for k in range(rows):
@@ -905,6 +987,7 @@ def make_gan_outputs():
 
             # B,C,W,H
 
+            # reconstruct image
             if args['type'] == 'sliding':
                 recon_image = detection.ce_sliding_window(img, netG, input_cropped, args)
             else:
@@ -923,6 +1006,7 @@ def make_gan_outputs():
                 recon_image.data[:, :, args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4,
                 args['img_size'][0] // 4:args['inpaint_size'] + args['img_size'][0] // 4] = fake.data
 
+            # generate prediction via naïve threshold
             mse = ((recon_image - img).square() * 2) - 1
             mse_threshold = mse > 0
             mse_threshold = (mse_threshold.float() * 2) - 1
@@ -934,6 +1018,7 @@ def make_gan_outputs():
 
             predictions.append(pred.cpu())
 
+        # plot each image
         temp = os.listdir(f"./final-outputs/ARGS={args['arg_num']}")
 
         fig, subplots = plt.subplots(
@@ -945,6 +1030,7 @@ def make_gan_outputs():
                 top=False, bottom=False, left=False, right=False,
                 labelleft=False, labelbottom=False
                 )
+
         for i, brain in enumerate(predictions):
             for plot in range(brain.shape[0]):
                 if plot == 2:
@@ -957,6 +1043,7 @@ def make_gan_outputs():
                         labelleft=False, labelbottom=False
                         )
 
+        #  set axis labels and save
         for i, val in enumerate(["$x_0$", "Reconstruction", "Square Error", "Prediction", "Ground Truth"]):
             subplots[0][i].set_xlabel(f"{val}", fontsize=6)
             subplots[0][i].xaxis.set_label_position("top")
@@ -980,9 +1067,11 @@ if __name__ == '__main__':
     from UNet import UNetModel
 
     import os
+    import sys
 
     os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
+    # add times new roman to mpl fonts
     font_path = "./times new roman.ttf"
     font_manager.fontManager.addfont(font_path)
     prop = font_manager.FontProperties(fname=font_path)
@@ -990,25 +1079,27 @@ if __name__ == '__main__':
     plt.rcParams['font.family'] = 'sans-serif'
     plt.rcParams['font.sans-serif'] = prop.get_name()
 
-    DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
+    if str(sys.argv[2]):
+        DATASET_PATH = str(sys.argv[2])
+    else:
+        DATASET_PATH = './DATASETS/CancerousDataset/EdinburghDataset/Anomalous-T1'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    import sys
 
     plt.set_cmap('gray')
 
-    plt.rcParams['figure.dpi'] = 1000
+    plt.rcParams['figure.dpi'] = 600
     scale_img = lambda img: ((img + 1) * 127.5).clamp(0, 255).to(torch.uint8)
 
-    # if str(sys.argv[1]) == "100":
-    #     make_unet_outputs()
+    # run different outputs based on model and dataset
     if str(sys.argv[1]) == "101" or str(sys.argv[1]) == "102" or str(sys.argv[1]) == "103" or str(sys.argv[1]) == \
             "104":
         make_gan_outputs()
     elif str(sys.argv[1]) == "23":
         make_varying_frequency_outputs()
     elif str(sys.argv[1]) == "26":
-        # gauss_varyingT_outputs()
-        make_ano_outputs()
+        make_videos()
+    elif str(sys.argv[1]) == "28":
+        make_videos()
     elif str(sys.argv[1]) == "30":
         make_videos()
     elif str(sys.argv[1]) == "1000":
@@ -1016,7 +1107,4 @@ if __name__ == '__main__':
     elif str(sys.argv[1]) == "1001":
         make_gauss_simplex_outputs("33", "32")
     else:
-        # make_graph_outputs()
-        # make_ano_outputs()
         make_ano_outputs()
-        # make_videos()

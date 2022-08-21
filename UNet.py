@@ -238,7 +238,7 @@ class UNetModel(nn.Module):
 
         if channel_mults == "":
             if img_size == 512:
-                channel_mult = (0.5, 1, 1, 2, 2, 4, 4)
+                channel_mults = (0.5, 1, 1, 2, 2, 4, 4)
             elif img_size == 256:
                 channel_mults = (1, 1, 2, 2, 4, 4)
             elif img_size == 128:
@@ -425,3 +425,24 @@ def update_ema_params(target, source, decay_rate=0.9999):
     srcParams = dict(source.named_parameters())
     for k in targParams:
         targParams[k].data.mul_(decay_rate).add_(srcParams[k].data, alpha=1 - decay_rate)
+
+
+if __name__ == "__main__":
+    args = {
+        'img_size':          256,
+        'base_channels':     64,
+        'dropout':           0.3,
+        'num_heads':         4,
+        'num_head_channels': '32,16,8',
+        'lr':                1e-4,
+        'Batch_Size':        64
+        }
+    model = UNetModel(
+            args['img_size'], args['base_channels'], dropout=args[
+                "dropout"], n_heads=args["num_heads"], attention_resolutions=args["num_head_channels"],
+            in_channels=3
+            )
+
+    x = torch.randn(1, 3, 512, 512)
+    t_batch = torch.tensor([1], device=x.device).repeat(x.shape[0])
+    print(model(x, t_batch).shape)

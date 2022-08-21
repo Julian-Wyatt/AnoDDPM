@@ -501,7 +501,6 @@ def roc_data():
     except OSError:
         pass
     t_distance = 250
-    start_time = time.time()
 
     simplex_sqe = []
     gauss_sqe = []

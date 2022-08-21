@@ -24,7 +24,8 @@ def load_ROC_csv(volume: str):
 
 def conv_csv_2_mu_std(volume: str, arg_num, mean_distance=20):
     metrics_df = pd.read_csv(f"./metrics/ARGS={arg_num}/{volume}.csv")
-    for i in ["Dice", "IOU"]:
+    print(metrics_df.columns)
+    for i in ["Dice", "IOU", "SSIM", "Precision", "Recall", "FPR"]:
 
         metrics_df[f"{i}_std"] = metrics_df[f"{i}"].rolling(mean_distance).std()
         metrics_df[f"{i}_mu"] = metrics_df[f"{i}"].rolling(mean_distance).mean()
@@ -50,9 +51,9 @@ def conv_csv_2_mu_std(volume: str, arg_num, mean_distance=20):
         plt.clf()
 
     metrics_df.to_csv(
-            f"./paper_images/ARGS={arg_num}-{volume}.csv", mode="w",
-            index=False, columns=["timestep", "Dice_mu", "Dice_error_min", "Dice_error_max", "IOU_mu", "IOU_error_min",
-                                  "IOU_error_max"]
+            f"./paper_images/ARGS={arg_num}-{volume}-precision-recall.csv", mode="w",
+            index=False, columns=["timestep", "Precision_mu", "Precision_error_min", "Precision_error_max",
+                                  "Recall_mu", "Recall_error_min", "Recall_error_max"]
             )
 
 
@@ -264,12 +265,12 @@ if __name__ == '__main__':
     # reduce_quality("./paper_images/temp-simplex.csv", 4)
     # reduce_quality("./paper_images/temp-GAN.csv", 4)
     # reduce_quality("./paper_images/temp-gauss.csv", 2)
-    # reduce_quality("./metrics/ROC_data_2/overall_simplex.csv", 600)
-    # reduce_quality("./metrics/ROC_data_2/overall_gauss.csv", 600)
-    # reduce_quality("./metrics/ROC_data_2/overall_hybrid.csv", 600)
-    # reduce_quality("./metrics/ROC_data_2/overall_GAN.csv", 20)
+    reduce_quality("./metrics/ROC_data_2/overall_simplex.csv", 1000)
+    reduce_quality("./metrics/ROC_data_2/overall_gauss.csv", 1000)
+    reduce_quality("./metrics/ROC_data_2/overall_hybrid.csv", 1000)
+    reduce_quality("./metrics/ROC_data_2/overall_GAN.csv", 30)
 
-    reduce_quality("./metrics/AnoGAN_ROC.csv", 20)
+    # reduce_quality("./metrics/AnoGAN_ROC.csv", 20)
     # conv_csv_2_mu_std("19691", 26)
     # conv_csv_2_mu_std("18756", 26)
     # conv_csv_2_mu_std("19691", 28)
