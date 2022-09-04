@@ -3,7 +3,6 @@ import random
 
 import matplotlib.pyplot as plt
 import numpy as np
-from perlin_numpy import generate_fractal_noise_2d
 
 import evaluation
 from helpers import *
@@ -162,12 +161,6 @@ class GaussianDiffusionModel:
         if noise == "gauss":
             self.noise_fn = lambda x, t: torch.randn_like(x)
 
-        elif noise == "perlin":
-            self.noise_fn = lambda x, t: torch.unsqueeze(
-                    torch.from_numpy(
-                            generate_fractal_noise_2d(img_size, (4, 4), 7, 0.8),
-                            ).to(x.device), 0
-                    ).repeat(x.shape[0], 1, 1, 1)
         else:
             self.simplex = Simplex_CLASS()
             if noise == "simplex_randParam":
